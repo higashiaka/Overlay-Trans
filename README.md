@@ -181,7 +181,7 @@ C++ 및 Kotlin 공식 스타일 가이드를 플랫폼별로 준수합니다.
 ### 브랜치 전략 (Git Flow 기반)
 
 - `main`: 안정적인 빌드가 가능한 릴리즈 브랜치
-- `develop`: 메인 개발 통합 브랜치
+- `dev`: 메인 개발 통합 브랜치
 - `feature/[기능명]`: 단위 기능 개발 브랜치 (예: `feature/wasapi-loopback`, `feature/jni-bridge`)
 
 ### 커밋 Type
