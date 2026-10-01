@@ -104,7 +104,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 │   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
 │   ├── ui/                        # Dear ImGui 기반 투명 오버레이 렌더링
 │   └── main.cpp                   # 윈도우 실행 진입점
-└── third_party/                   # 서브모듈로 관리하는 외부 라이브러리 (miniaudio 등)
+└── third_party/                   # 서브모듈로 관리하는 외부 라이브러리 (miniaudio, whisper.cpp, llama.cpp)
 ```
 
 ## 5. 🧑‍💻 개발 컨벤션
@@ -186,9 +186,10 @@ $ git config commit.template .gitmessage
 $ git clone --recursive https://github.com/higashiaka/Overlay-Trans.git
 $ cd Overlay-Trans
 
-# 2. VAD / STT 모델 다운로드 (core/models/는 git에 포함되지 않음)
+# 2. VAD / STT / 번역 모델 다운로드 (core/models/는 git에 포함되지 않음. 번역 모델은 약 2.5GB)
 $ curl -L -o core/models/ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
 $ curl -L -o core/models/ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+$ curl -L -o core/models/gemma-3-4b-it-Q4_K_M.gguf https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf
 
 # 3. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
 $ cmake --preset windows-x64
@@ -197,7 +198,7 @@ $ cmake --build --preset windows-x64
 # 4. 실행 (저장소 루트에서 실행)
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe
 
-# 언어를 지정하면 자동 감지보다 빠름. 모델 경로는 --stt-model, --vad-model로 바꿀 수 있음
+# 언어를 지정하면 자동 감지보다 빠름. 모델 경로는 --stt-model, --llm-model, --vad-model로 바꿀 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
