@@ -182,62 +182,59 @@ C++ 및 Kotlin 공식 스타일 가이드를 플랫폼별로 준수합니다.
 
 - `main`: 안정적인 빌드가 가능한 릴리즈 브랜치
 - `dev`: 메인 개발 통합 브랜치
-- `feature/[기능명]`: 단위 기능 개발 브랜치 (예: `feature/wasapi-loopback`, `feature/jni-bridge`)
+- `<type>/<설명>`: 단위 작업 브랜치. `dev`에서 분기하고 `dev`로 PR을 보냅니다.
+  - `<type>`은 아래 커밋 Type과 동일하게 사용합니다.
+  - `<설명>`은 영문 소문자 kebab-case로 작성합니다. (예: `feat/wasapi-loopback`, `chore/cmake-x64-skeleton`)
+  - 브랜치 하나는 PR 하나로 끝나는 작은 단위로 유지하고, merge 후 삭제합니다.
 
 ### 커밋 Type
 
 | Type | 사용 상황 | 예시 |
 | --- | --- | --- |
-| feat | 새로운 기능 추가 | `feat/1-miniaudio-capture` |
-| fix | 버그 수정 | `fix/5-memory-leak-whisper` |
-| refactor | 기능 변화 없는 코드 개선 | `refactor/12-ring-buffer` |
-| chore | 설정, 빌드, 패키지, 환경 작업 | `chore/3-cmake-setup` |
-| docs | 문서 수정 | `docs/readme-update` |
+| feat | 새로운 기능 추가 | `feat: WASAPI 루프백 캡처 추가` |
+| fix | 버그 수정 | `fix: whisper 컨텍스트 해제 누락으로 인한 메모리 누수 수정` |
+| refactor | 기능 변화 없는 코드 개선 | `refactor: 링 버퍼 인덱스 계산 단순화` |
+| perf | 성능 개선 (지연 시간, 메모리 등) | `perf: 번역 추론 시 KV 캐시 재사용` |
+| test | 테스트 추가/수정 | `test: 링 버퍼 오버플로우 케이스 추가` |
+| docs | 문서 수정 | `docs: 빌드 방법 갱신` |
+| chore | 설정, 빌드, 패키지, 환경 작업 | `chore: whisper.cpp 서브모듈 추가` |
 
 ### 커밋 컨벤션
 
 ```
-[Type]: [Title]
+<type>: <제목>
 
-[Body - Optional]
+- <무엇을 왜 바꿨는지>
+- <무엇을 왜 바꿨는지>
 ```
 
-예시:
+- **제목**: 한국어, 50자 이내, 마침표 없이 "추가 / 수정 / 제거 / 개선" 같은 명사형으로 끝냅니다.
+- **본문**: 선택 사항입니다. 제목만으로 부족할 때 둘째 줄을 비우고 `- ` 항목으로 작성합니다. (한 줄 72자 이내)
+- 커밋 하나에는 하나의 논리적 변경만 담습니다.
 
-```
-feat: WASAPI 기반 시스템 사운드 루프백 캡처 추가
-chore: whisper.cpp 서브모듈 연결 및 CMake 리스트 업데이트
-fix: 안드로이드 권한 거부 시 앱 크래시 문제 수정
+커밋 메시지 템플릿은 [.gitmessage](.gitmessage)에 있습니다. 저장소를 clone한 뒤 한 번만 등록하면 `git commit` 실행 시 에디터에 자동으로 채워집니다.
+
+```bash
+$ git config commit.template .gitmessage
 ```
 
 ## 8. PR 및 코드 리뷰 규칙 (Pn 룰)
 
-- **PR 조건**: 로컬 CMake/Gradle 빌드 검증 완료 후 개설
+- **PR 조건**: 로컬 빌드 검증 완료 후 개설
+- **PR 대상**: 작업 브랜치 → `dev` (`dev` → `main`은 릴리즈 시점에만)
+- **PR 제목**: 커밋 제목과 같은 형식 (`<type>: <제목>`)
+- **PR 본문**: [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) 양식을 사용합니다. GitHub에서 PR을 열면 자동으로 채워집니다.
+  - `개요`: 무엇을 왜 했는지 1~3문장
+  - `변경 사항`: 변경 내용을 항목별로 정리
+  - `검증`: 실제로 확인한 항목만 체크하고, 해당 없는 항목은 삭제
+  - `남은 이슈 (Pn)`: 이 PR에서 해결하지 않고 남긴 것을 아래 Pn 등급과 함께 기록
+- **Merge 방식**: Squash and merge. `dev`에는 PR 하나가 커밋 하나로 남고, 커밋 제목은 PR 제목을 그대로 사용합니다.
+- **충돌 해결**: `dev`를 작업 브랜치에 merge해 머지 커밋 하나로 해결합니다. (rebase / force push는 사용하지 않습니다.)
+- **이슈**: GitHub 이슈는 사용하지 않습니다. 작업 단위는 로드맵과 PR로 추적합니다.
 - **코드 리뷰 Pn 규칙** (1인 개발 환경이므로 스스로 체크리스트 목적으로 사용)
-  - `P1`: 반드시 해결해야 하는 치명적 이슈 (메모리 릭, JNI 크래시 등)
+  - `P1`: 반드시 해결해야 하는 치명적 이슈 (메모리 릭, 크래시 등)
   - `P2`: 최적화 및 리팩토링 고려 대상 (Latency 개선 등)
   - `P3`: 나중에 처리해도 되는 UI 디테일
-
-### PR 작성 템플릿
-
-```markdown
-type: 작업 내용 (예: feat: 안드로이드 MediaProjection 권한 로직 구현)
-
-## 개요
-<!-- 이번 PR에서 어떤 작업을 했는지 간단히 설명해주세요. -->
-
-## 작업 내용 (커밋 로그 기반)
--
--
-
-## 테스트 방법
-- [ ] 데스크톱/모바일 환경 빌드 통과
-- [ ] 오디오 캡처 시 레이턴시 500ms 미만 유지 여부
-- [ ] 메모리 누수 발생 여부 확인 (작업 관리자 / Android Profiler)
-
-## 관련 이슈
-close #
-```
 
 ## 9. 빌드 및 실행 방식
 
