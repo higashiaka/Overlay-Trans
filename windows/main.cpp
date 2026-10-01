@@ -3,6 +3,7 @@
 #include "audio/wav_writer.h"
 #include "capture/loopback_capture.h"
 #include "inference/speech_recognizer.h"
+#include "inference/translator.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -24,6 +25,7 @@ namespace {
 struct Options {
     std::string vad_model = "core/models/ggml-silero-v6.2.0.bin";
     std::string stt_model = "core/models/ggml-base.bin";
+    std::string llm_model = "core/models/gemma-3-4b-it-Q4_K_M.gguf";
     std::string language = "auto";
     std::string dump_wav;  // 비어 있으면 덤프하지 않는다.
     bool use_gpu = true;   // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
@@ -38,6 +40,8 @@ Options parse_options(int argc, char** argv) {
             options.vad_model = argv[i + 1];
         } else if (name == "--stt-model") {
             options.stt_model = argv[i + 1];
+        } else if (name == "--llm-model") {
+            options.llm_model = argv[i + 1];
         } else if (name == "--language") {
             options.language = argv[i + 1];
         } else if (name == "--dump-wav") {
@@ -82,16 +86,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    Translator translator;
+    const TranslatorConfig translator_config{
+        .use_gpu = options.use_gpu,
+        .gpu_device = options.gpu_device,
+    };
+    if (!translator.init(options.llm_model, translator_config)) {
+        std::fprintf(stderr, "Failed to load translation model: %s\n", options.llm_model.c_str());
+        return 1;
+    }
+
     VadSegmenter vad;
     const bool vad_ready = vad.init(options.vad_model, vad_config, [&](std::span<const float> samples) {
-        const auto started_at = std::chrono::steady_clock::now();
-        const std::string text = recognizer.transcribe(samples);
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started_at);
+        using Clock = std::chrono::steady_clock;
+        const auto to_ms = [](Clock::duration duration) {
+            return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
+        };
 
-        std::printf("[%.2f s audio, %lld ms] %s\n",
+        const auto stt_started_at = Clock::now();
+        const std::string text = recognizer.transcribe(samples);
+        const auto translation_started_at = Clock::now();
+        const std::string translation = text.empty() ? std::string() : translator.translate(text);
+        const auto finished_at = Clock::now();
+
+        std::printf("[%.2f s audio | STT %lld ms | translation %lld ms]\n  %s\n  %s\n",
                     static_cast<double>(samples.size()) / static_cast<double>(samples_per_second),
-                    static_cast<long long>(elapsed.count()), text.c_str());
+                    to_ms(translation_started_at - stt_started_at), to_ms(finished_at - translation_started_at),
+                    text.c_str(), translation.c_str());
         std::fflush(stdout);
     });
     if (!vad_ready) {

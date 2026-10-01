@@ -4,4 +4,4 @@ add_executable(OverlayTransWin
 )
 
 target_include_directories(OverlayTransWin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(OverlayTransWin PRIVATE overlay_core miniaudio)
+target_link_libraries(OverlayTransWin PRIVATE overlay_core overlay_miniaudio)
