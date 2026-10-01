@@ -7,6 +7,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(third_party)
 
+# 외부 라이브러리에는 적용되지 않도록 third_party 뒤에서 설정한다.
+if(MSVC)
+    add_compile_options(/W4 /utf-8)
+endif()
+
+add_subdirectory(core)
+
 if(WIN32)
     add_subdirectory(windows)
 endif()
