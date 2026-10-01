@@ -1,5 +1,6 @@
 add_executable(OverlayTransWin
     main.cpp
+    capture/audio_file_reader.cpp
     capture/loopback_capture.cpp
 )
 

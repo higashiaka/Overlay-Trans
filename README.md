@@ -201,6 +201,10 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe
 # 언어를 지정하면 자동 감지보다 빠름. 모델 경로는 --stt-model, --llm-model, --vad-model로 바꿀 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 
+# 오디오 파일(WAV, MP3, FLAC)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
+# 영상이나 다른 형식은 먼저 변환: ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input recording.wav
+
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```

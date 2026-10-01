@@ -11,7 +11,6 @@ target_include_directories(overlay_miniaudio SYSTEM PUBLIC miniaudio)
 target_compile_definitions(overlay_miniaudio PUBLIC
     MA_ENABLE_ONLY_SPECIFIC_BACKENDS
     MA_ENABLE_WASAPI
-    MA_NO_DECODING
     MA_NO_GENERATION
     MA_NO_ENGINE
     MA_NO_NODE_GRAPH
