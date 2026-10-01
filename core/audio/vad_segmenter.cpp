@@ -108,6 +108,8 @@ bool VadSegmenter::init(const std::filesystem::path& model_path, const VadConfig
     if (impl_->context == nullptr) {
         return false;
     }
+    // 모델 내부 상태는 생성 직후 초기화되어 있지 않다. 지우지 않으면 실행할 때마다 결과가 달라진다.
+    whisper_vad_reset_state(impl_->context);
 
     impl_->config = config;
     impl_->on_segment = std::move(on_segment);
