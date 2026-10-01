@@ -184,6 +184,9 @@ $ cmake --build --preset windows-x64
 
 # 3. 실행
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe
+
+# (디버깅) 캡처한 오디오를 WAV 파일로 저장
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
