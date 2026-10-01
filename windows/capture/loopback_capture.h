@@ -8,8 +8,9 @@
 namespace overlay_trans {
 
 struct CaptureConfig {
-    uint32_t sample_rate = 16000;  // whisper.cpp 입력 샘플레이트
-    uint32_t channels = 2;         // 화자 분리를 위해 스테레오 유지
+    // whisper.cpp 입력 포맷(16kHz 모노)에 맞춘다.
+    uint32_t sample_rate = 16000;
+    uint32_t channels = 1;
 };
 
 // 기본 출력 장치에서 재생 중인 시스템 오디오를 WASAPI 루프백으로 캡처한다.
