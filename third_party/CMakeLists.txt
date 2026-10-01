@@ -19,4 +19,6 @@ target_compile_definitions(miniaudio PUBLIC
 
 # whisper.cpp는 실행 파일에 정적으로 링크한다. (기본값은 DLL 빌드)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-add_subdirectory(whisper.cpp EXCLUDE_FROM_ALL)
+# Vulkan 셰이더 빌드는 폴더가 깊어 Windows 경로 길이 제한(260자)에 걸린다.
+# 빌드 폴더 이름을 한 글자(w)로 두어 경로를 줄인다.
+add_subdirectory(whisper.cpp ${CMAKE_BINARY_DIR}/w EXCLUDE_FROM_ALL)

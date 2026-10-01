@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,8 @@ struct Options {
     std::string stt_model = "core/models/ggml-base.bin";
     std::string language = "auto";
     std::string dump_wav;  // 비어 있으면 덤프하지 않는다.
+    bool use_gpu = true;   // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
+    int gpu_device = 0;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -39,6 +42,10 @@ Options parse_options(int argc, char** argv) {
             options.language = argv[i + 1];
         } else if (name == "--dump-wav") {
             options.dump_wav = argv[i + 1];
+        } else if (name == "--device") {
+            options.use_gpu = std::string_view(argv[i + 1]) != "cpu";
+        } else if (name == "--gpu-device") {
+            options.gpu_device = std::atoi(argv[i + 1]);
         }
     }
     return options;
@@ -65,7 +72,12 @@ int main(int argc, char** argv) {
     }
 
     SpeechRecognizer recognizer;
-    if (!recognizer.init(options.stt_model, SttConfig{.language = options.language})) {
+    const SttConfig stt_config{
+        .language = options.language,
+        .use_gpu = options.use_gpu,
+        .gpu_device = options.gpu_device,
+    };
+    if (!recognizer.init(options.stt_model, stt_config)) {
         std::fprintf(stderr, "Failed to load STT model: %s\n", options.stt_model.c_str());
         return 1;
     }
