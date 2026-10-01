@@ -92,10 +92,11 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 │   ├── audio/                     # 오디오 버퍼링 및 VAD 알고리즘 구현체
 │   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스
 │   └── models/                    # GGUF 양자화 모델 파일 보관 (gitignore)
-└── windows/                       # [Windows] 데스크톱 쉘
-    ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
-    ├── ui/                        # Dear ImGui 기반 투명 오버레이 렌더링
-    └── main.cpp                   # 윈도우 실행 진입점
+├── windows/                       # [Windows] 데스크톱 쉘
+│   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
+│   ├── ui/                        # Dear ImGui 기반 투명 오버레이 렌더링
+│   └── main.cpp                   # 윈도우 실행 진입점
+└── third_party/                   # 서브모듈로 관리하는 외부 라이브러리 (miniaudio 등)
 ```
 
 ## 5. 🧑‍💻 개발 컨벤션
@@ -174,13 +175,15 @@ $ git config commit.template .gitmessage
 
 ```bash
 # 1. 저장소 및 서브모듈 클론
-$ git clone --recursive https://github.com/[Your-Repository]/overlay-trans.git
+$ git clone --recursive https://github.com/higashiaka/Overlay-Trans.git
+$ cd Overlay-Trans
 
-# 2. Windows 빌드 (CMake)
-$ cd overlay-trans/windows
-$ mkdir build && cd build
-$ cmake ..
-$ cmake --build . --config Release
+# 2. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
+$ cmake --preset windows-x64
+$ cmake --build --preset windows-x64
+
+# 3. 실행
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
