@@ -30,10 +30,12 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | 분류 | 기술 스택 | 상세 환경 / 주요 라이브러리 |
 | --- | --- | --- |
 | Core Language | C++20 | 핵심 비즈니스 로직 및 AI 추론 엔진 구동 |
-| STT Engine | whisper.cpp | 온디바이스 음성 인식 (GPU 가속은 아래 가속기 항목 참조) |
-| LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 및 화자 분리 텍스트 가공 |
-| GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 기본 백엔드 |
-| Audio Capture | miniaudio (WASAPI) | Windows 루프백 스테레오 캡처 |
+| VAD | Silero VAD | whisper.cpp 내장 VAD 사용 (발화 구간 검출) |
+| STT Engine | whisper.cpp | 온디바이스 음성 인식 |
+| LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 |
+| Speaker Diarization | sherpa-onnx (예정) | 발화 구간별 화자 임베딩으로 화자 구분 |
+| GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
+| Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
 | UI Framework | Dear ImGui | Windows 투명 오버레이 |
 | Target Architecture | x86_64 (Windows) | 라데온 x64 데스크톱 |
 | Build System | CMake (아키텍처별 프리셋) | C++ 라이브러리 관리 및 빌드 |
@@ -53,25 +55,26 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 - **Step 1: 오디오 루프백 캡처**
   - `IMMDeviceEnumerator` / `IAudioClient`를 공유 모드(Shared Mode) + 루프백(Loopback) 플래그로 초기화
   - `miniaudio.h` 디바이스 콜백에서 PCM 프레임 수신 및 포맷 변환 (float32 ↔ int16)
-  - 화자 분리를 위한 스테레오(L/R) 채널 분리 및 독립 버퍼 관리
+  - whisper.cpp 입력에 맞춘 16kHz 모노 변환
   - Lock-free 고리형 버퍼(Ring Buffer) 구현 및 오버플로우 정책 정의
   - 디버깅용 raw PCM/WAV 덤프 로깅 기능 추가
   - 검증: 캡처 지연 시간 및 샘플 드랍(drop) 유무 측정
 - **Step 2: VAD 및 슬라이딩 윈도우 구현**
-  - VAD 알고리즘 선정 및 이식 (WebRTC VAD 또는 Silero VAD 경량화 버전)
-  - 슬라이딩 윈도우 크기/오버랩 정의 (예: 30ms frame, 10ms hop)
+  - whisper.cpp 서브모듈 연동 (VAD와 STT가 함께 사용)
+  - Silero VAD 적용 (whisper.cpp 내장 VAD, 모델 파일은 `core/models/`에 보관)
+  - 슬라이딩 윈도우 크기/오버랩 정의
   - 발화 시작(Speech Onset)/종료(Speech Offset) 감지 및 무음 구간 트리밍
   - 게임 효과음/BGM 오탐 방지를 위한 임계값(threshold) 튜닝
   - 검출된 발화 세그먼트를 STT 큐로 전달하는 파이프라인 연결
 - **Step 3: whisper.cpp 통합 (STT)**
-  - whisper.cpp 서브모듈 연동 및 CMake 빌드 설정 (Vulkan 백엔드 활성화)
+  - whisper.cpp STT 빌드 설정 (CPU 기본, Vulkan 백엔드 옵션)
   - base 다국어 GGML 모델 다운로드 및 로딩 루틴 구현
   - 청크 단위 스트리밍 추론 구조 설계 (이전 컨텍스트 유지, 문장 경계 처리)
   - 언어 자동 감지(auto-detect) 및 언어 강제 지정 옵션 제공
-  - 벤치마크: RTF(Real-Time Factor) 측정(라데온 Vulkan), 한/일/영 인식 정확도 테스트
+  - 벤치마크: CPU / Vulkan 구성별 RTF(Real-Time Factor) 측정, 한/일/영 인식 정확도 테스트
 - **Step 4: llama.cpp 연동 (문맥 번역)**
   - llama.cpp 서브모듈 연동 및 번역용 경량 GGUF 모델 선정/양자화
-  - 화자 정보(L/R 채널)와 이전 대화 맥락 N턴을 포함한 System Prompt 설계
+  - 이전 대화 맥락 N턴을 포함한 System Prompt 설계
   - 인터넷 방송 신조어·은어 처리를 위한 프롬프트 가이드 및 사전(glossary) 구성
   - Token-by-Token 스트리밍 추론 구현 (KV 캐시 재사용으로 지연 시간 최소화)
   - STT → 번역 파이프라인 연결 및 번역 품질 회귀 테스트 케이스 작성
@@ -81,6 +84,11 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
   - 자막 텍스트 렌더링(폰트, 스타일, 페이드 인/아웃 애니메이션) 구현
   - 자막 위치/크기/투명도 조절이 가능한 사용자 설정 UI 추가
   - E2E 통합 테스트: 캡처 → VAD → STT → LLM → 오버레이 전체 파이프라인 지연 시간(목표 500ms 이하) 측정
+- **Step 6: 화자 분리 (Speaker Diarization)**
+  - sherpa-onnx 연동 및 화자 임베딩 모델 선정
+  - VAD가 검출한 발화 구간마다 화자 임베딩을 추출하고, 기존 화자와 비교해 화자 번호 부여
+  - 화자 정보를 번역 프롬프트와 자막 표시에 반영
+  - 검증: 화자 식별 추가에 따른 지연 시간 증가 측정
 
 ## 4. 프로젝트 폴더 구조
 
