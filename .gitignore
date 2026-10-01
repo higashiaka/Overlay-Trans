@@ -56,3 +56,6 @@ Thumbs.db
 # ==== Logs / Debug dumps ====
 *.log
 *.wav
+
+# ==== Local test audio (방송 녹음 파일) ====
+sample/

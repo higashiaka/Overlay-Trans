@@ -8,7 +8,8 @@
 
 namespace overlay_trans {
 
-// 오디오 파일(WAV, MP3, FLAC)을 지정한 샘플레이트와 채널 수의 float32로 읽는다.
+// 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)의 오디오를 지정한 샘플레이트와 채널 수의 float32로 읽는다.
+// 디코딩은 Windows Media Foundation이 처리한다.
 class AudioFileReader {
 public:
     AudioFileReader();
