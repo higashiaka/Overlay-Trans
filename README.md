@@ -155,14 +155,14 @@ $ git config commit.template .gitmessage
 ## 7. PR 및 코드 리뷰 규칙 (Pn 룰)
 
 - **PR 조건**: 로컬 빌드 검증 완료 후 개설
-- **PR 대상**: 작업 브랜치 → `dev` (`dev` → `main`은 릴리즈 시점에만)
+- **PR 대상**: 작업 브랜치 → `dev` (`dev` → `main`은 릴리즈 시점에만). GitHub의 base 기본값은 `main`이므로 PR 생성 시 `dev`로 변경합니다.
 - **PR 제목**: 커밋 제목과 같은 형식 (`<type>: <제목>`)
 - **PR 본문**: [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) 양식을 사용합니다. GitHub에서 PR을 열면 자동으로 채워집니다.
   - `개요`: 무엇을 왜 했는지 1~3문장
   - `변경 사항`: 변경 내용을 항목별로 정리
   - `검증`: 실제로 확인한 항목만 체크하고, 해당 없는 항목은 삭제
   - `남은 이슈 (Pn)`: 이 PR에서 해결하지 않고 남긴 것을 아래 Pn 등급과 함께 기록
-- **Merge 방식**: Squash and merge. `dev`에는 PR 하나가 커밋 하나로 남고, 커밋 제목은 PR 제목을 그대로 사용합니다.
+- **Merge 방식**: Create a merge commit. 작업 브랜치의 커밋을 그대로 남기고 merge 커밋 하나를 추가합니다.
 - **충돌 해결**: `dev`를 작업 브랜치에 merge해 머지 커밋 하나로 해결합니다. (rebase / force push는 사용하지 않습니다.)
 - **이슈**: GitHub 이슈는 사용하지 않습니다. 작업 단위는 로드맵과 PR로 추적합니다.
 - **코드 리뷰 Pn 규칙** (1인 개발 환경이므로 스스로 체크리스트 목적으로 사용)
