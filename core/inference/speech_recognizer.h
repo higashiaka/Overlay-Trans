@@ -10,6 +10,9 @@ namespace overlay_trans {
 struct SttConfig {
     // "ja", "ko", "en" 같은 언어 코드. "auto"면 발화마다 언어를 감지한다.
     std::string language = "auto";
+    // GPU 백엔드(Vulkan)를 포함해 빌드한 경우에만 효과가 있다.
+    bool use_gpu = true;
+    int gpu_device = 0;
 };
 
 // whisper.cpp로 발화 구간을 텍스트로 변환한다.

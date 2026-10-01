@@ -67,7 +67,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
   - 게임 효과음/BGM 오탐 방지를 위한 임계값(threshold) 튜닝
   - 검출된 발화 세그먼트를 STT 큐로 전달하는 파이프라인 연결
 - **Step 3: whisper.cpp 통합 (STT)**
-  - whisper.cpp STT 빌드 설정 (CPU 기본, Vulkan 백엔드 옵션)
+  - whisper.cpp STT 빌드 설정 (CPU 프리셋 `windows-x64`, Vulkan 프리셋 `windows-x64-vulkan`)
   - base 다국어 GGML 모델 다운로드 및 로딩 루틴 구현
   - 청크 단위 스트리밍 추론 구조 설계 (이전 컨텍스트 유지, 문장 경계 처리)
   - 언어 자동 감지(auto-detect) 및 언어 강제 지정 옵션 제공
@@ -203,6 +203,28 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
+
+### GPU(Vulkan) 가속 빌드
+
+[Vulkan SDK](https://vulkan.lunarg.com/sdk/home) 설치가 필요합니다. (`winget install KhronosGroup.VulkanSDK`)
+
+```bash
+$ cmake --preset windows-x64-vulkan
+$ cmake --build --preset windows-x64-vulkan
+
+# 기본으로 GPU 0번을 사용. --gpu-device <번호>로 장치를 바꾸고, --device cpu로 CPU를 강제할 수 있음
+$ ./build/vk/windows/Release/OverlayTransWin.exe --language ja
+```
+
+- Vulkan 빌드는 폴더가 깊어 Windows 경로 길이 제한(260자)에 걸릴 수 있습니다. 저장소를 짧은 경로에 clone하세요. 빌드 폴더 이름이 `build/vk`로 짧은 것도 이 때문입니다.
+
+발화 구간 하나당 STT 처리 시간 (Ryzen 9 9900X / Radeon RX 6600, 언어 지정 시):
+
+| 모델 | CPU | Vulkan |
+| --- | --- | --- |
+| base | 약 0.3초 | 약 0.12초 |
+| small | 약 1.1초 | 약 0.35초 |
+| large-v3-turbo-q5_0 | 약 5초 | 약 1.4초 |
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
 

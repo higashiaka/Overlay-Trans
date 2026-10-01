@@ -36,7 +36,9 @@ SpeechRecognizer::~SpeechRecognizer() {
 bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttConfig& config) {
     quiet_whisper_log();
 
-    const whisper_context_params params = whisper_context_default_params();
+    whisper_context_params params = whisper_context_default_params();
+    params.use_gpu = config.use_gpu;
+    params.gpu_device = config.gpu_device;
     impl_->context = whisper_init_from_file_with_params(model_path.string().c_str(), params);
     if (impl_->context == nullptr) {
         return false;
