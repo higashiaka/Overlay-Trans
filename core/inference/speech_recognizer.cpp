@@ -51,6 +51,9 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
 std::string SpeechRecognizer::transcribe(std::span<const float> samples) {
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.language = impl_->config.language.c_str();
+    if (!impl_->config.vocabulary_hint.empty()) {
+        params.initial_prompt = impl_->config.vocabulary_hint.c_str();
+    }
     params.n_threads = default_thread_count();
     // 발화 구간 하나를 독립된 한 문장으로 처리한다.
     params.no_context = true;
