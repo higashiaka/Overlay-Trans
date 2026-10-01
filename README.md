@@ -186,11 +186,14 @@ $ git config commit.template .gitmessage
 $ git clone --recursive https://github.com/higashiaka/Overlay-Trans.git
 $ cd Overlay-Trans
 
-# 2. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
+# 2. VAD 모델 다운로드 (core/models/는 git에 포함되지 않음)
+$ curl -L -o core/models/ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
+
+# 3. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
 $ cmake --preset windows-x64
 $ cmake --build --preset windows-x64
 
-# 3. 실행
+# 4. 실행 (저장소 루트에서 실행. 모델 경로는 --vad-model <경로>로 바꿀 수 있음)
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
