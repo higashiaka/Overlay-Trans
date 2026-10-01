@@ -53,5 +53,6 @@ third_party/*/build/
 .DS_Store
 Thumbs.db
 
-# ==== Logs ====
+# ==== Logs / Debug dumps ====
 *.log
+*.wav
