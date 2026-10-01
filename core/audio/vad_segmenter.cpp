@@ -1,9 +1,10 @@
 #include "vad_segmenter.h"
 
+#include "inference/whisper_log.h"
+
 #include <whisper.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <utility>
 #include <vector>
 
@@ -19,13 +20,6 @@ constexpr float SILENCE_THRESHOLD_MARGIN = 0.15f;
 
 constexpr size_t ms_to_samples(uint32_t ms) {
     return SAMPLE_RATE * ms / 1000;
-}
-
-// whisper.cpp는 호출마다 INFO 로그를 남기므로 경고와 오류만 출력한다.
-void log_warnings_only(ggml_log_level level, const char* text, void*) {
-    if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR) {
-        std::fputs(text, stderr);
-    }
 }
 
 }  // namespace
@@ -105,7 +99,7 @@ VadSegmenter::~VadSegmenter() {
 
 bool VadSegmenter::init(const std::filesystem::path& model_path, const VadConfig& config,
                         SegmentCallback on_segment) {
-    whisper_log_set(log_warnings_only, nullptr);
+    quiet_whisper_log();
 
     whisper_vad_context_params params = whisper_vad_default_context_params();
     params.n_threads = 1;  // 모델이 작아 스레드를 늘려도 이득이 없다.

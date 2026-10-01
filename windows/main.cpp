@@ -2,6 +2,11 @@
 #include "audio/vad_segmenter.h"
 #include "audio/wav_writer.h"
 #include "capture/loopback_capture.h"
+#include "inference/speech_recognizer.h"
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 
 #include <chrono>
 #include <cstddef>
@@ -17,6 +22,8 @@ namespace {
 
 struct Options {
     std::string vad_model = "core/models/ggml-silero-v6.2.0.bin";
+    std::string stt_model = "core/models/ggml-base.bin";
+    std::string language = "auto";
     std::string dump_wav;  // 비어 있으면 덤프하지 않는다.
 };
 
@@ -26,6 +33,10 @@ Options parse_options(int argc, char** argv) {
         const std::string_view name = argv[i];
         if (name == "--vad-model") {
             options.vad_model = argv[i + 1];
+        } else if (name == "--stt-model") {
+            options.stt_model = argv[i + 1];
+        } else if (name == "--language") {
+            options.language = argv[i + 1];
         } else if (name == "--dump-wav") {
             options.dump_wav = argv[i + 1];
         }
@@ -37,6 +48,9 @@ Options parse_options(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     using namespace overlay_trans;
+
+    // 인식 결과(UTF-8)가 콘솔에서 깨지지 않게 한다.
+    SetConsoleOutputCP(CP_UTF8);
 
     const Options options = parse_options(argc, argv);
     const CaptureConfig config;
@@ -50,10 +64,23 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    SpeechRecognizer recognizer;
+    if (!recognizer.init(options.stt_model, SttConfig{.language = options.language})) {
+        std::fprintf(stderr, "Failed to load STT model: %s\n", options.stt_model.c_str());
+        return 1;
+    }
+
     VadSegmenter vad;
     const bool vad_ready = vad.init(options.vad_model, vad_config, [&](std::span<const float> samples) {
-        std::printf("Speech segment: %.2f s\n",
-                    static_cast<double>(samples.size()) / static_cast<double>(samples_per_second));
+        const auto started_at = std::chrono::steady_clock::now();
+        const std::string text = recognizer.transcribe(samples);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_at);
+
+        std::printf("[%.2f s audio, %lld ms] %s\n",
+                    static_cast<double>(samples.size()) / static_cast<double>(samples_per_second),
+                    static_cast<long long>(elapsed.count()), text.c_str());
+        std::fflush(stdout);
     });
     if (!vad_ready) {
         std::fprintf(stderr, "Failed to load VAD model: %s\n", options.vad_model.c_str());
