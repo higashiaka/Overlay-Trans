@@ -10,6 +10,8 @@ namespace overlay_trans {
 struct SttConfig {
     // "ja", "ko", "en" 같은 언어 코드. "auto"면 발화마다 언어를 감지한다.
     std::string language = "auto";
+    // 자주 나오는 이름과 용어를 적어 두면 그 표기로 인식될 확률이 올라간다. (UTF-8, 비워 두면 사용하지 않는다.)
+    std::string vocabulary_hint;
     // GPU 백엔드(Vulkan)를 포함해 빌드한 경우에만 효과가 있다.
     bool use_gpu = true;
     int gpu_device = 0;

@@ -201,6 +201,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe
 # 언어를 지정하면 자동 감지보다 빠름. 모델 경로는 --stt-model, --llm-model, --vad-model로 바꿀 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 
+# STT에 자주 나오는 이름과 용어를 미리 알려 주면 그 표기로 인식될 확률이 올라감
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-hint "ビッツ、サブスク、ギフト"
+
 # 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input sample/recording.mp4

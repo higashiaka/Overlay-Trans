@@ -34,6 +34,7 @@ struct Options {
     std::filesystem::path input_file;  // 비어 있으면 시스템 오디오를 캡처한다.
     std::filesystem::path dump_wav;    // 비어 있으면 덤프하지 않는다.
     std::string language = "auto";
+    std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
 };
@@ -61,6 +62,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.dump_wav = value;
         } else if (name == L"--language") {
             options.language = to_utf8(value);
+        } else if (name == L"--stt-hint") {
+            options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
             options.use_gpu = value != L"cpu";
         } else if (name == L"--gpu-device") {
@@ -187,6 +190,7 @@ int wmain(int argc, wchar_t** argv) {
     SpeechRecognizer recognizer;
     const SttConfig stt_config{
         .language = options.language,
+        .vocabulary_hint = options.stt_hint,
         .use_gpu = options.use_gpu,
         .gpu_device = options.gpu_device,
     };
