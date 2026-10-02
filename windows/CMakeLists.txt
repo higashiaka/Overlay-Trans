@@ -5,6 +5,7 @@ add_executable(OverlayTransWin
 )
 
 target_include_directories(OverlayTransWin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(OverlayTransWin PRIVATE OVERLAY_TRANS_VERSION="${PROJECT_VERSION}")
 target_link_libraries(OverlayTransWin PRIVATE
     overlay_core
     overlay_miniaudio
