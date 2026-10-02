@@ -40,7 +40,10 @@ public:
 
     // UTF-8 문장을 번역해 UTF-8로 반환한다. 실패하면 빈 문자열을 반환한다.
     // chat에는 이 발화 직전에 올라온 채팅을 "이름: 내용" 형식으로 넘긴다. 번역의 맥락으로만 쓰인다.
-    std::string translate(std::string_view text, std::span<const std::string> chat = {});
+    // replace_previous가 true면 직전에 번역한 문장을 맥락에서 빼고 이 문장으로 바꾼다.
+    // 직전 문장에 말이 이어져서, 둘을 합친 문장을 다시 번역할 때 쓴다.
+    std::string translate(std::string_view text, std::span<const std::string> chat = {},
+                          bool replace_previous = false);
 
 private:
     struct Impl;
