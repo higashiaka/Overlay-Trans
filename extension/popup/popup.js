@@ -18,9 +18,13 @@ const codeInput = document.getElementById("code");
 const pairButton = document.getElementById("pair");
 const resultElement = document.getElementById("result");
 const showSourceCheckbox = document.getElementById("show-source");
+const diagnosticsElement = document.getElementById("diagnostics");
 
 async function refreshStatus() {
-  const { status } = await chrome.runtime.sendMessage({ type: "getStatus" });
+  const { status, diagnostics } = await chrome.runtime.sendMessage({ type: "getStatus" });
+  diagnosticsElement.textContent = diagnostics
+    ? `화면에서 찾은 채팅 ${diagnostics.chatLines}줄 · 앱으로 보낸 채팅 ${diagnostics.sentChat}개`
+    : "";
   statusElement.textContent = STATUS_TEXT[status] ?? status;
   statusElement.className = "status";
   if (status === "connected") {
