@@ -28,3 +28,14 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # 빌드 폴더 이름을 한 글자(l, w)로 두어 경로를 줄인다.
 add_subdirectory(llama.cpp ${CMAKE_BINARY_DIR}/l EXCLUDE_FROM_ALL)
 add_subdirectory(whisper.cpp ${CMAKE_BINARY_DIR}/w EXCLUDE_FROM_ALL)
+
+# 로컬 통신 서버에 쓰는 cpp-httplib과 JSON 라이브러리. llama.cpp에 들어 있는 사본을 그대로 사용한다.
+add_library(overlay_httplib STATIC llama.cpp/vendor/cpp-httplib/httplib.cpp)
+target_include_directories(overlay_httplib SYSTEM PUBLIC llama.cpp/vendor/cpp-httplib llama.cpp/vendor)
+target_compile_features(overlay_httplib PUBLIC cxx_std_17)
+if(MSVC)
+    target_compile_options(overlay_httplib PRIVATE /utf-8)
+endif()
+if(WIN32)
+    target_link_libraries(overlay_httplib PUBLIC ws2_32)
+endif()

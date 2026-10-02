@@ -99,6 +99,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 ├── core/                          # [C++] 플랫폼 독립적인 핵심 엔진
 │   ├── audio/                     # 오디오 버퍼링 및 VAD 알고리즘 구현체
 │   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스
+│   ├── server/                    # 브라우저 확장 프로그램과 통신하는 로컬 서버
 │   └── models/                    # GGUF 양자화 모델 파일 보관 (gitignore)
 ├── windows/                       # [Windows] 데스크톱 쉘
 │   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
@@ -214,6 +215,21 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
+
+### 브라우저 확장 프로그램 연동 (준비 중)
+
+앱은 실행되면 이 PC 안에서만 접속할 수 있는 로컬 서버(`127.0.0.1:47815`)를 열고, 시작할 때 페어링 코드를 출력합니다. 확장 프로그램에 이 코드를 한 번 입력하면 자막을 받아 갈 수 있습니다.
+
+- 페어링 코드는 `포트-키` 형식이며, 키는 `%LOCALAPPDATA%\OverlayTrans\pairing-token.txt`에 저장되어 다음 실행에도 그대로 쓰입니다.
+- 키가 맞지 않는 요청과 일반 웹페이지에서 온 요청은 거부합니다.
+- 포트는 `--port <번호>`로 바꿀 수 있습니다. 포트가 이미 쓰이고 있으면 앱이 시작되지 않습니다.
+
+| 요청 | 설명 |
+| --- | --- |
+| `GET /v1/ping` | 연결과 페어링 키 확인 |
+| `GET /v1/subtitles?after=<번호>` | 해당 번호 이후의 자막(원문, 번역). 없으면 새 자막이 나올 때까지 최대 20초 기다림 |
+
+모든 요청에 `Authorization: Bearer <키>` 헤더가 필요합니다.
 
 ### GPU(Vulkan) 가속 빌드
 
