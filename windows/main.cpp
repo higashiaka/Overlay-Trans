@@ -5,10 +5,13 @@
 #include "capture/loopback_capture.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
+#include "server/pairing_token.h"
+#include "server/subtitle_server.h"
 
-#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+
+#include <shlobj.h>
 
 #include <chrono>
 #include <cstddef>
@@ -40,6 +43,7 @@ struct Options {
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
+    int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
     int llm_gpu_layers = -1;  // 번역 모델에서 GPU에 올릴 층 수. -1이면 전부.
 };
 
@@ -72,6 +76,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
             options.use_gpu = value != L"cpu";
+        } else if (name == L"--port") {
+            options.port = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         } else if (name == L"--gpu-device") {
             options.gpu_device = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         } else if (name == L"--llm-gpu-layers") {
@@ -79,6 +85,17 @@ Options parse_options(int argc, wchar_t** argv) {
         }
     }
     return options;
+}
+
+// 페어링 키를 저장하는 파일. 사용자별 로컬 앱 데이터 폴더 아래에 둔다.
+std::filesystem::path pairing_token_path() {
+    std::filesystem::path folder = ".";
+    PWSTR local_app_data = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local_app_data))) {
+        folder = local_app_data;
+    }
+    CoTaskMemFree(local_app_data);
+    return folder / "OverlayTrans" / "pairing-token.txt";
 }
 
 // UTF-8 텍스트 파일 전체를 읽는다. 열 수 없으면 false를 반환한다.
@@ -231,6 +248,15 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
+    // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
+    const std::string token = load_or_create_pairing_token(pairing_token_path());
+    SubtitleServer server;
+    if (token.empty() || !server.start({.port = options.port, .token = token})) {
+        std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);
+        return 1;
+    }
+    std::printf("Pairing code: %d-%s\n", options.port, token.c_str());
+
     VadSegmenter vad;
     const bool vad_ready = vad.init(options.vad_model, vad_config, [&](std::span<const float> samples) {
         const auto to_ms = [](Clock::duration duration) {
@@ -248,6 +274,10 @@ int wmain(int argc, wchar_t** argv) {
                     to_ms(translation_started_at - stt_started_at), to_ms(finished_at - translation_started_at),
                     text.c_str(), translation.c_str());
         std::fflush(stdout);
+
+        if (!translation.empty()) {
+            server.publish({text, translation});
+        }
     });
     if (!vad_ready) {
         std::fprintf(stderr, "Failed to load VAD model: %s\n", to_utf8(options.vad_model).c_str());

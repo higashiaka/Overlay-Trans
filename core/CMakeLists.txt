@@ -5,7 +5,9 @@ add_library(overlay_core STATIC
     inference/speech_recognizer.cpp
     inference/translator.cpp
     inference/whisper_log.cpp
+    server/pairing_token.cpp
+    server/subtitle_server.cpp
 )
 
 target_include_directories(overlay_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(overlay_core PRIVATE whisper llama)
+target_link_libraries(overlay_core PRIVATE whisper llama overlay_httplib)

@@ -13,4 +13,6 @@ target_link_libraries(OverlayTransWin PRIVATE
     mfreadwrite
     mfuuid
     ole32
+    # 로컬 앱 데이터 폴더 조회
+    shell32
 )
