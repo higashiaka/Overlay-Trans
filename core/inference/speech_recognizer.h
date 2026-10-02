@@ -14,6 +14,7 @@ struct SttConfig {
     std::string vocabulary_hint;
     // GPU 백엔드(Vulkan)를 포함해 빌드한 경우에만 효과가 있다.
     bool use_gpu = true;
+    // 외장 GPU가 여러 개일 때 몇 번째를 쓸지. 내장 GPU는 세지 않는다.
     int gpu_device = 0;
 };
 
