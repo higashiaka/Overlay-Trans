@@ -94,6 +94,10 @@ struct Translator::Impl {
     llama_model* model = nullptr;
     llama_context* context = nullptr;
     llama_sampler* sampler = nullptr;
+    // 영문자까지 막은 샘플러. 한국어로 번역할 때만 만든다.
+    llama_sampler* hangul_only_sampler = nullptr;
+    // 지금 번역하는 문장에 쓸 샘플러. translate에서 문장마다 고른다.
+    llama_sampler* active_sampler = nullptr;
     const llama_vocab* vocab = nullptr;
     TranslatorConfig config;
 
@@ -192,7 +196,7 @@ void Translator::Impl::remove_last_line() {
 std::string Translator::Impl::generate() {
     std::string text;
     for (int i = 0; i < config.max_output_tokens; ++i) {
-        llama_token token = llama_sampler_sample(sampler, context, -1);
+        llama_token token = llama_sampler_sample(active_sampler, context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
             break;
         }
@@ -215,6 +219,9 @@ Translator::Translator() : impl_(std::make_unique<Impl>()) {}
 Translator::~Translator() {
     if (impl_->sampler != nullptr) {
         llama_sampler_free(impl_->sampler);
+    }
+    if (impl_->hangul_only_sampler != nullptr) {
+        llama_sampler_free(impl_->hangul_only_sampler);
     }
     if (impl_->context != nullptr) {
         llama_free(impl_->context);
@@ -252,25 +259,47 @@ bool Translator::init(const std::filesystem::path& model_path, const TranslatorC
 
     impl_->sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
 
-    // 한국어로 번역할 때는 일본어·중국어 글자가 든 토큰을 아예 고르지 못하게 막는다.
-    // 지시문으로 부탁하는 것만으로는 원문의 가나와 한자를 그대로 옮겨 적는 일을 막지 못했다.
+    // 한국어로 번역할 때는 다른 나라 글자(가나, 한자, 키릴 문자 등)가 든 토큰을 아예 고르지 못하게 막는다.
+    // 지시문으로 부탁하는 것만으로는 원문의 글자를 그대로 옮겨 적거나 엉뚱한 언어의 단어를 섞는 일을 막지 못했다.
+    // 영문자는 원문에 영문자가 있을 때만 필요하므로, 영문자까지 막은 샘플러를 따로 둔다.
     if (config.target_language == "Korean") {
         const int32_t token_count = llama_vocab_n_tokens(impl_->vocab);
         std::vector<llama_logit_bias> blocked;
+        std::vector<llama_logit_bias> blocked_with_latin;
         for (llama_token token = 0; token < token_count; ++token) {
+            // 답을 끝내는 토큰 같은 제어 토큰은 이름이 영문이어도 막으면 안 된다. 막으면 번역이 끝나지 않는다.
+            if (llama_vocab_is_control(impl_->vocab, token) || llama_vocab_is_eog(impl_->vocab, token)) {
+                continue;
+            }
             char piece[PIECE_BUFFER_SIZE];
             const int32_t length = llama_token_to_piece(impl_->vocab, token, piece, sizeof(piece), 0, true);
-            if (length > 0 && contains_kana_or_han(std::string_view(piece, static_cast<size_t>(length)))) {
-                blocked.push_back({token, -std::numeric_limits<float>::infinity()});
+            if (length <= 0) {
+                continue;
+            }
+            const std::string_view text(piece, static_cast<size_t>(length));
+            const llama_logit_bias bias{token, -std::numeric_limits<float>::infinity()};
+            if (contains_non_korean_script(text, true)) {
+                blocked.push_back(bias);
+            }
+            if (contains_non_korean_script(text, false)) {
+                blocked_with_latin.push_back(bias);
             }
         }
         llama_sampler_chain_add(impl_->sampler, llama_sampler_init_logit_bias(token_count,
                                                                               static_cast<int32_t>(blocked.size()),
                                                                               blocked.data()));
+
+        impl_->hangul_only_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(impl_->hangul_only_sampler,
+                                llama_sampler_init_logit_bias(token_count,
+                                                              static_cast<int32_t>(blocked_with_latin.size()),
+                                                              blocked_with_latin.data()));
+        llama_sampler_chain_add(impl_->hangul_only_sampler, llama_sampler_init_greedy());
     }
 
     // 같은 입력에 항상 같은 번역이 나오도록 가장 확률이 높은 토큰만 고른다.
     llama_sampler_chain_add(impl_->sampler, llama_sampler_init_greedy());
+    impl_->active_sampler = impl_->sampler;
 
     impl_->config = config;
     impl_->system_prompt = build_system_prompt(config, {});
@@ -303,6 +332,12 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
     if (replace_previous && !impl_->history.empty()) {
         impl_->remove_last_line();
     }
+
+    // 원문과 용어집에 영문자가 없으면 번역문에도 영문자가 나올 이유가 없다.
+    // 막지 않으면 가타카나 낱말을 뜻이 다른 영어 낱말로 바꿔 적는 일이 있었다.
+    const bool needs_latin = contains_latin_letter(source) || contains_latin_letter(impl_->config.glossary);
+    impl_->active_sampler =
+        impl_->hangul_only_sampler != nullptr && !needs_latin ? impl_->hangul_only_sampler : impl_->sampler;
 
     llama_pos memory_start = -1;
     size_t formatted_start = 0;
