@@ -36,7 +36,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | Speaker Diarization | sherpa-onnx (예정) | 발화 구간별 화자 임베딩으로 화자 구분 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
-| 자막 표시 | 브라우저 확장 프로그램 (Manifest V3) | 앱의 로컬 서버에서 자막을 받아 방송 영상 위에 표시 (트위치) |
+| 자막 표시 | 브라우저 확장 프로그램 (Manifest V3) | 앱의 로컬 서버에서 자막을 받아 방송 영상 위에 표시 (트위치, 유튜브) |
 | 배포 | Inno Setup, GitHub Actions | 태그를 올리면 Windows 설치 프로그램을 빌드해 릴리즈 초안에 등록 |
 | Target Architecture | x86_64 (Windows) | 라데온 x64 데스크톱 |
 | Build System | CMake (아키텍처별 프리셋) | C++ 라이브러리 관리 및 빌드 |
@@ -191,7 +191,7 @@ $ git config commit.template .gitmessage
 
 1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
 2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
-3. 콘솔 창에 `Pairing code: ...`가 나오면, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
+3. 콘솔 창에 `Pairing code: ...`가 나오면, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
 
 - Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
 - 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다.
@@ -243,15 +243,15 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-au
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
 
-### 브라우저 확장 프로그램 (트위치)
+### 브라우저 확장 프로그램 (트위치, 유튜브)
 
-`extension/` 폴더의 확장 프로그램이 앱에서 자막을 받아 트위치 영상 위에 표시합니다. 크롬 기반 브라우저(크롬, 웨일, 엣지)에서 동작합니다.
+`extension/` 폴더의 확장 프로그램이 앱에서 자막을 받아 트위치와 유튜브 영상 위에 표시합니다. 크롬 기반 브라우저(크롬, 웨일, 엣지)에서 동작합니다.
 
 1. 브라우저 주소창에 `chrome://extensions`(웨일은 `whale://extensions`)를 입력해 엽니다.
 2. "개발자 모드"를 켜고 "압축해제된 확장 프로그램을 로드합니다"를 눌러 `extension` 폴더를 선택합니다.
 3. 앱을 실행하고, 콘솔에 출력된 `Pairing code: ...` 값을 복사합니다.
 4. 브라우저의 확장 프로그램 아이콘을 눌러 페어링 코드를 입력하고 "연결"을 누릅니다. (한 번만 하면 됩니다.)
-5. 트위치 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
+5. 트위치나 유튜브에서 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
 
 사이트 화면 구조에 의존하는 코드는 `extension/content/sites/`에 사이트별 파일로 분리되어 있습니다.
 
