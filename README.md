@@ -226,13 +226,33 @@ $ ./build/vk/windows/Release/OverlayTransWin.exe --language ja
 
 - Vulkan 빌드는 폴더가 깊어 Windows 경로 길이 제한(260자)에 걸릴 수 있습니다. 저장소를 짧은 경로에 clone하세요. 빌드 폴더 이름이 `build/vk`로 짧은 것도 이 때문입니다.
 
-발화 구간 하나당 STT 처리 시간 (Ryzen 9 9900X / Radeon RX 6600, 언어 지정 시):
+#### VRAM이 모자랄 때
 
-| 모델 | CPU | Vulkan |
+STT 모델과 번역 모델의 합이 남은 VRAM을 넘으면, 넘친 부분이 일반 메모리로 밀려나 추론이 몇 배 느려집니다. 다른 프로그램(브라우저 등)이 쓰는 VRAM도 함께 계산해야 합니다. 이때는 번역 모델을 GPU에 일부만 올리는 편이 빠릅니다.
+
+```bash
+# 번역 모델의 층 중 16개만 GPU에 올림 (-1이면 전부, 0이면 CPU만)
+$ ./build/vk/windows/Release/OverlayTransWin.exe --language ja --llm-gpu-layers 16
+```
+
+#### 측정 결과 (Ryzen 9 9900X / Radeon RX 6600 8GB, 실제 방송 음성)
+
+발화 구간 하나당 STT 처리 시간 (Vulkan, 언어 지정 시):
+
+| STT 모델 | 처리 시간 | VRAM |
 | --- | --- | --- |
-| base | 약 0.3초 | 약 0.12초 |
-| small | 약 1.1초 | 약 0.35초 |
-| large-v3-turbo-q5_0 | 약 5초 | 약 1.4초 |
+| base | 약 0.08초 | 약 0.3GB |
+| small | 약 0.22초 | - |
+| large-v3-turbo-q5_0 | 약 0.81초 | 약 2.0GB |
+
+STT를 large-v3-turbo로 두고, 다른 프로그램이 VRAM을 약 3.5GB 쓰는 상태에서 잰 번역 시간:
+
+| 번역 모델 | GPU에 올린 층 | 번역 평균 |
+| --- | --- | --- |
+| Gemma 3 4B | 전부 (VRAM 초과) | 약 0.81초 |
+| Gemma 3 4B | 16 | 약 0.51초 |
+| Qwen 3.5 4B | 12 | 약 0.74초 |
+| Qwen 3.5 2B | 전부 | 약 0.13초 |
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
 

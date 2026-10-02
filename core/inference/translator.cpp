@@ -12,7 +12,6 @@ namespace overlay_trans {
 namespace {
 
 constexpr unsigned int MAX_THREADS = 8;
-constexpr int ALL_LAYERS_ON_GPU = -1;
 constexpr int PIECE_BUFFER_SIZE = 256;
 
 int default_thread_count() {
@@ -61,6 +60,11 @@ std::string Translator::Impl::apply_chat_template(const std::string& instruction
                                            static_cast<int32_t>(prompt.size()));
     }
     prompt.resize(static_cast<size_t>(std::max(length, 0)));
+
+    // Qwen 계열처럼 답하기 전에 생각 과정을 출력하는 모델은, 빈 생각 블록을 미리 넣어 바로 답하게 한다.
+    if (chat_template != nullptr && std::string_view(chat_template).find("enable_thinking") != std::string_view::npos) {
+        prompt += "<think>\n\n</think>\n\n";
+    }
     return prompt;
 }
 
@@ -91,7 +95,7 @@ bool Translator::init(const std::filesystem::path& model_path, const TranslatorC
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = config.use_gpu ? ALL_LAYERS_ON_GPU : 0;
+    model_params.n_gpu_layers = config.gpu_layers;
     // GPU가 여러 개여도 지정한 장치 하나만 쓴다. (내장 GPU로 나뉘면 느려진다.)
     model_params.split_mode = LLAMA_SPLIT_MODE_NONE;
     model_params.main_gpu = config.gpu_device;
