@@ -19,7 +19,7 @@
 ## 1. 프로젝트 소개
 
 - **앱 이름**: OverLay-Trans
-- **한 줄 설명**: 스트리머 방송의 시스템 오디오를 캡처하여 실시간 온디바이스 STT 및 경량 LLM 번역을 거쳐 화면 최상단에 자막을 띄우는 오버레이 번역 서비스입니다.
+- **한 줄 설명**: 스트리머 방송의 시스템 오디오를 캡처하여 실시간 온디바이스 STT 및 경량 LLM 번역을 거쳐, 브라우저의 방송 영상 위에 자막을 띄우는 오버레이 번역 서비스입니다.
 - **서비스 목표**: 서버 통신 비용 없이 C/C++ 기반 100% 온디바이스 구동을 목표로 하며, 인터넷 방송 특유의 신조어와 화자 분리(Diarization) 맥락을 반영하여 시청자에게 완벽한 몰입감을 제공합니다.
 - **개발 형태**: 1인 개발 (기획부터 C++ 코어, 오버레이 UI까지 전 영역 단독 진행)
 
@@ -36,7 +36,8 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | Speaker Diarization | sherpa-onnx (예정) | 발화 구간별 화자 임베딩으로 화자 구분 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
-| UI Framework | Dear ImGui | Windows 투명 오버레이 |
+| 자막 표시 | 브라우저 확장 프로그램 (Manifest V3) | 앱의 로컬 서버에서 자막을 받아 방송 영상 위에 표시 (트위치) |
+| 배포 | Inno Setup, GitHub Actions | 태그를 올리면 Windows 설치 프로그램을 빌드해 릴리즈 초안에 등록 |
 | Target Architecture | x86_64 (Windows) | 라데온 x64 데스크톱 |
 | Build System | CMake (아키텍처별 프리셋) | C++ 라이브러리 관리 및 빌드 |
 
@@ -78,13 +79,12 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
   - 인터넷 방송 신조어·은어 처리를 위한 프롬프트 가이드 및 사전(glossary) 구성
   - Token-by-Token 스트리밍 추론 구현 (KV 캐시 재사용으로 지연 시간 최소화)
   - STT → 번역 파이프라인 연결 및 번역 품질 회귀 테스트 케이스 작성
-- **Step 5: 투명 오버레이 UI 개발**
-  - `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST` 속성의 클릭 관통형 오버레이 창 생성
-  - Dear ImGui + DirectX/OpenGL 렌더링 백엔드 연동
-  - 자막 텍스트 렌더링(폰트, 스타일, 페이드 인/아웃 애니메이션) 구현
-  - 자막 위치/크기/투명도 조절이 가능한 사용자 설정 UI 추가
+- **Step 5: 자막 오버레이 (브라우저 확장 프로그램)**
+  - 방송을 브라우저로 보므로, 별도 창 대신 확장 프로그램이 영상 위에 자막을 그리는 방식으로 구현
+  - 앱의 로컬 서버(페어링 키 인증)에서 자막을 받아 표시하고, 방송 정보와 채팅을 앱으로 전달
+  - 말이 이어지면 앞의 자막과 합쳐 다시 번역하고 화면의 자막을 교체
   - E2E 통합 테스트: 캡처 → VAD → STT → LLM → 오버레이 전체 파이프라인 지연 시간(목표: 발화가 끝난 뒤 약 1.5초 이내) 측정
-- **Step 6: 화자 분리 (Speaker Diarization)**
+- **Step 6: 화자 분리 (Speaker Diarization)** — 1.0.0에 포함되지 않음
   - sherpa-onnx 연동 및 화자 임베딩 모델 선정
   - VAD가 검출한 발화 구간마다 화자 임베딩을 추출하고, 기존 화자와 비교해 화자 번호 부여
   - 화자 정보를 번역 프롬프트와 자막 표시에 반영
@@ -100,15 +100,16 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 │   ├── audio/                     # 오디오 버퍼링 및 VAD 알고리즘 구현체
 │   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스
 │   ├── server/                    # 브라우저 확장 프로그램과 통신하는 로컬 서버
+│   ├── text/                      # 번역 결과 후처리 (가타카나 표기, 글자 종류 판별)
 │   └── models/                    # GGUF 양자화 모델 파일 보관 (gitignore)
 ├── windows/                       # [Windows] 데스크톱 쉘
-│   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
-│   ├── ui/                        # Dear ImGui 기반 투명 오버레이 렌더링
+│   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio), 오디오 파일 입력
 │   └── main.cpp                   # 윈도우 실행 진입점
 ├── extension/                     # [브라우저] 영상 위에 자막을 표시하는 확장 프로그램
 │   ├── background.js              # 앱의 로컬 서버에서 자막을 받아 페이지로 전달
 │   ├── content/                   # 자막 표시 (sites/ 아래에 사이트별 화면 구조 코드)
 │   └── popup/                     # 페어링 코드 입력과 설정
+├── installer/                     # [배포] Windows 설치 프로그램 (Inno Setup)과 실행 스크립트
 └── third_party/                   # 서브모듈로 관리하는 외부 라이브러리 (miniaudio, whisper.cpp, llama.cpp)
 ```
 
@@ -186,6 +187,18 @@ $ git config commit.template .gitmessage
 
 ## 8. 빌드 및 실행 방식
 
+### 설치 프로그램으로 설치 (Windows x64)
+
+1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
+2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
+3. 콘솔 창에 `Pairing code: ...`가 나오면, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
+
+- Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
+- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다.
+- 제거는 Windows 설정의 "설치된 앱"에서 합니다. 내려받은 모델도 함께 지워집니다.
+
+### 소스에서 빌드
+
 ```bash
 # 1. 저장소 및 서브모듈 클론
 $ git clone --recursive https://github.com/higashiaka/Overlay-Trans.git
@@ -193,7 +206,7 @@ $ cd Overlay-Trans
 
 # 2. VAD / STT / 번역 모델 다운로드 (core/models/는 git에 포함되지 않음. 번역 모델은 약 2.5GB)
 $ curl -L -o core/models/ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
-$ curl -L -o core/models/ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+$ curl -L -o core/models/ggml-large-v3-turbo-q5_0.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 $ curl -L -o core/models/gemma-3-4b-it-Q4_K_M.gguf https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf
 
 # 3. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
@@ -222,9 +235,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-
 # 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
 
-# STT가 한 번에 계산하는 길이를 줄여 인식을 빠르게 함 (한 칸에 20ms, 기본은 모델 전체인 1500칸=30초)
-# 768이면 인식 시간이 1/3 정도로 줄지만 인식 결과가 일부 달라짐. 발화가 더 길면 그 발화만 자동으로 늘림
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-audio-ctx 768
+# STT가 한 번에 계산하는 길이 (한 칸에 20ms). 기본은 768칸으로, 모델 전체(1500칸=30초)를 계산할 때보다
+# 인식 시간이 1/3 정도로 줄지만 인식 결과가 일부 달라짐. 발화가 더 길면 그 발화만 자동으로 늘림. 0이면 모델 전체를 계산
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-audio-ctx 0
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
@@ -298,6 +311,24 @@ STT를 large-v3-turbo로 두고, 다른 프로그램이 VRAM을 약 3.5GB 쓰는
 | Gemma 3 4B | 16 | 약 0.51초 |
 | Qwen 3.5 4B | 12 | 약 0.74초 |
 | Qwen 3.5 2B | 전부 | 약 0.13초 |
+
+### 릴리즈 만들기
+
+`.github/workflows/release.yml`이 Windows 설치 프로그램을 만듭니다.
+
+1. `CMakeLists.txt`의 `project(... VERSION x.y.z)`를 올리고 `dev`를 `main`에 merge합니다.
+2. `main`에 `v<버전>` 태그를 올립니다. (`git tag v1.0.0` → `git push origin v1.0.0`) 태그와 프로젝트 버전이 다르면 빌드가 실패합니다.
+3. Actions가 Vulkan 빌드와 설치 프로그램을 만들어 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다.
+
+태그 없이 Actions 탭에서 Release 워크플로를 직접 실행하면, 설치 프로그램만 만들어 실행 결과(Artifacts)에 올립니다.
+
+로컬에서 만들 때는 Vulkan 프리셋으로 빌드한 뒤 아래를 실행합니다. ([Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요)
+
+```bash
+$ powershell -ExecutionPolicy Bypass -File installer/package.ps1
+$ "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.0.0 installer/OverlayTrans.iss
+# 결과: build/installer/OverlayTrans-Setup-1.0.0.exe
+```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
 
