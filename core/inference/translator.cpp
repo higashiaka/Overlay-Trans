@@ -1,5 +1,7 @@
 #include "translator.h"
 
+#include "text/katakana.h"
+
 #include <llama.h>
 
 #include <algorithm>
@@ -31,7 +33,16 @@ std::string build_system_prompt(const TranslatorConfig& config) {
     prompt += "Each user message is one line of speech-recognition text. ";
     prompt += "Reply with only its natural, colloquial " + config.target_language + " translation. ";
     prompt += "Stay faithful to the original: do not add, explain, or answer anything. ";
-    prompt += "Earlier lines are context for understanding the current one.";
+    prompt += "Earlier lines are context for understanding the current one. ";
+    // 방송 용어는 외래어가 많아서, 뜻을 추측해 옮기면 틀리기 쉽다. 애매하면 소리 나는 대로 적게 한다.
+    prompt += "Katakana words are usually loanwords, game terms, or names: unless you are sure of the meaning, ";
+    prompt += "transliterate them by sound instead of guessing a translation. ";
+    prompt += "Transliterate people's names by sound as well.";
+
+    if (config.target_language == "Korean") {
+        prompt += " Examples: スパイク -> 스파이크, エイム -> 에임, ボックス -> 박스, ミントさん -> 민트 님.";
+        prompt += " Write the reply in Hangul only: no Chinese characters and no Japanese kana.";
+    }
 
     if (!config.glossary.empty()) {
         prompt += "\n\nGlossary (always use these translations):\n" + config.glossary;
@@ -221,6 +232,10 @@ std::string Translator::translate(std::string_view text) {
     }
 
     std::string translation = impl_->generate();
+    // 모델이 옮기지 않고 남긴 가타카나는 소리 나는 대로 한글로 바꾼다.
+    if (impl_->config.target_language == "Korean") {
+        translation = katakana_to_hangul(translation);
+    }
 
     impl_->history.push_back({source, translation});
     impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
