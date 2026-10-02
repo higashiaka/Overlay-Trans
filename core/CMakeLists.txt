@@ -8,6 +8,7 @@ add_library(overlay_core STATIC
     server/pairing_token.cpp
     server/subtitle_server.cpp
     text/katakana.cpp
+    text/script.cpp
 )
 
 target_include_directories(overlay_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -33,8 +34,13 @@ public:
 
     bool init(const std::filesystem::path& model_path, const TranslatorConfig& config);
 
+    // 방송 제목이나 게임 이름처럼 번역에 참고할 정보를 지시문에 넣는다. (UTF-8, 비우면 제거)
+    // translate와 같은 스레드에서 호출해야 한다.
+    void set_stream_info(const std::string& info);
+
     // UTF-8 문장을 번역해 UTF-8로 반환한다. 실패하면 빈 문자열을 반환한다.
-    std::string translate(std::string_view text);
+    // chat에는 이 발화 직전에 올라온 채팅을 "이름: 내용" 형식으로 넘긴다. 번역의 맥락으로만 쓰인다.
+    std::string translate(std::string_view text, std::span<const std::string> chat = {});
 
 private:
     struct Impl;

@@ -242,6 +242,8 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 | --- | --- |
 | `GET /v1/ping` | 연결과 페어링 키 확인 |
 | `GET /v1/subtitles?after=<번호>` | 해당 번호 이후의 자막(원문, 번역). 없으면 새 자막이 나올 때까지 최대 20초 기다림 |
+| `POST /v1/context` | 방송 정보 전달 (JSON: `channel`, `title`, `category`). 번역 지시문에 쓰임 |
+| `POST /v1/chat` | 새로 올라온 채팅 전달 (JSON: `messages[{name, text}]`). 앱을 `--chat-context on`으로 실행한 경우에만 직후 발화의 번역 맥락으로 쓰임 (기본은 꺼짐) |
 
 모든 요청에 `Authorization: Bearer <키>` 헤더가 필요합니다.
 

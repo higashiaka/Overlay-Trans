@@ -22,6 +22,11 @@ constexpr const char* EXTENSION_ORIGIN_PREFIX = "chrome-extension://";
 constexpr auto LONG_POLL_TIMEOUT = std::chrono::seconds(20);
 // 늦게 접속한 쪽에 돌려줄 수 있도록 보관하는 자막 수.
 constexpr size_t MAX_STORED_SUBTITLES = 50;
+// 방송 정보로 받는 값의 상한. 넘는 부분은 버린다.
+constexpr size_t MAX_CONTEXT_TEXT_BYTES = 600;
+constexpr size_t MAX_NAME_BYTES = 120;
+constexpr size_t MAX_CHAT_MESSAGES = 50;
+constexpr size_t MAX_CHAT_TEXT_BYTES = 300;
 
 struct StoredSubtitle {
     int64_t sequence;
@@ -43,7 +48,33 @@ struct SubtitleServer::Impl {
 
     bool authorize(const httplib::Request& request, httplib::Response& response) const;
     void handle_subtitles(const httplib::Request& request, httplib::Response& response);
+    void handle_context(const httplib::Request& request, httplib::Response& response) const;
+    void handle_chat(const httplib::Request& request, httplib::Response& response) const;
 };
+
+namespace {
+
+// JSON에서 문자열 값을 꺼낸다. 없거나 문자열이 아니면 빈 문자열, 너무 길면 잘라서 반환한다.
+std::string read_text(const nlohmann::json& object, const char* key, size_t max_bytes) {
+    const auto found = object.find(key);
+    if (found == object.end() || !found->is_string()) {
+        return {};
+    }
+    std::string text = found->get<std::string>();
+    if (text.size() > max_bytes) {
+        text.resize(max_bytes);
+        // UTF-8 글자 중간에서 잘렸으면 그 글자를 통째로 버린다.
+        while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80) {
+            text.pop_back();
+        }
+        if (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0xC0) {
+            text.pop_back();
+        }
+    }
+    return text;
+}
+
+}  // namespace
 
 bool SubtitleServer::Impl::authorize(const httplib::Request& request, httplib::Response& response) const {
     // 일반 웹페이지가 보낸 요청은 거부한다. 확장 프로그램이나 브라우저 밖에서 온 요청만 받는다.
@@ -54,7 +85,7 @@ bool SubtitleServer::Impl::authorize(const httplib::Request& request, httplib::R
             return false;
         }
         response.set_header("Access-Control-Allow-Origin", origin);
-        response.set_header("Access-Control-Allow-Headers", "Authorization");
+        response.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type");
     }
 
     // 브라우저가 본 요청 전에 보내는 확인 요청에는 페어링 키가 실려 있지 않다.
@@ -106,6 +137,53 @@ void SubtitleServer::Impl::handle_subtitles(const httplib::Request& request, htt
     response.set_content(body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), JSON_TYPE);
 }
 
+void SubtitleServer::Impl::handle_context(const httplib::Request& request, httplib::Response& response) const {
+    const nlohmann::json body = nlohmann::json::parse(request.body, nullptr, false);
+    if (!body.is_object()) {
+        response.status = 400;
+        return;
+    }
+
+    StreamContext context;
+    context.channel = read_text(body, "channel", MAX_CONTEXT_TEXT_BYTES);
+    context.title = read_text(body, "title", MAX_CONTEXT_TEXT_BYTES);
+    context.category = read_text(body, "category", MAX_CONTEXT_TEXT_BYTES);
+
+    if (config.on_context) {
+        config.on_context(std::move(context));
+    }
+    response.set_content(R"({"ok":true})", JSON_TYPE);
+}
+
+void SubtitleServer::Impl::handle_chat(const httplib::Request& request, httplib::Response& response) const {
+    const nlohmann::json body = nlohmann::json::parse(request.body, nullptr, false);
+    if (!body.is_object()) {
+        response.status = 400;
+        return;
+    }
+
+    std::vector<ChatMessage> messages;
+    if (const auto list = body.find("messages"); list != body.end() && list->is_array()) {
+        for (const nlohmann::json& item : *list) {
+            if (messages.size() >= MAX_CHAT_MESSAGES) {
+                break;
+            }
+            if (!item.is_object()) {
+                continue;
+            }
+            ChatMessage message{read_text(item, "name", MAX_NAME_BYTES), read_text(item, "text", MAX_CHAT_TEXT_BYTES)};
+            if (!message.text.empty()) {
+                messages.push_back(std::move(message));
+            }
+        }
+    }
+
+    if (config.on_chat && !messages.empty()) {
+        config.on_chat(std::move(messages));
+    }
+    response.set_content(R"({"ok":true})", JSON_TYPE);
+}
+
 SubtitleServer::SubtitleServer() : impl_(std::make_unique<Impl>()) {}
 
 SubtitleServer::~SubtitleServer() {
@@ -124,6 +202,12 @@ bool SubtitleServer::start(const ServerConfig& config) {
     });
     impl_->server.Get("/v1/subtitles", [this](const httplib::Request& request, httplib::Response& response) {
         impl_->handle_subtitles(request, response);
+    });
+    impl_->server.Post("/v1/context", [this](const httplib::Request& request, httplib::Response& response) {
+        impl_->handle_context(request, response);
+    });
+    impl_->server.Post("/v1/chat", [this](const httplib::Request& request, httplib::Response& response) {
+        impl_->handle_chat(request, response);
     });
 
 #ifdef _WIN32
