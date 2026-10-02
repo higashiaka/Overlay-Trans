@@ -22,12 +22,16 @@ constexpr size_t ms_to_samples(uint32_t ms) {
     return SAMPLE_RATE * ms / 1000;
 }
 
+constexpr uint32_t samples_to_ms(size_t samples) {
+    return static_cast<uint32_t>(samples * 1000 / SAMPLE_RATE);
+}
+
 }  // namespace
 
 struct VadSegmenter::Impl {
     whisper_vad_context* context = nullptr;
     VadConfig config;
-    SegmentCallback on_segment;
+    VadCallbacks callbacks;
 
     std::vector<float> pending;   // 아직 창 크기를 채우지 못한 샘플
     std::vector<float> pre_roll;  // 발화 시작 전 구간 (speech_pad_ms 분량)
@@ -35,9 +39,11 @@ struct VadSegmenter::Impl {
     std::vector<float> speech_probabilities;  // segment에서 pre_roll 뒤에 이어진 창들의 음성 확률
     size_t lead_samples = 0;      // segment 앞에 붙인 pre_roll 길이
     size_t silence_samples = 0;   // 발화 끝에 이어진 무음 길이
+    size_t paused_samples = 0;    // on_pause로 미리 알린 구간의 길이. 알리지 않았으면 0
     bool in_speech = false;
 
     void on_window(const float* window, float probability);
+    void cancel_pause();
     void end_segment();
     void cut_long_segment();
 };
@@ -67,6 +73,7 @@ void VadSegmenter::Impl::on_window(const float* window, float probability) {
         silence_samples += WINDOW_SAMPLES;
     } else {
         silence_samples = 0;
+        cancel_pause();
     }
 
     // 발화가 길어질수록 더 짧은 쉼에서도 끊는다.
@@ -78,6 +85,22 @@ void VadSegmenter::Impl::on_window(const float* window, float probability) {
         end_segment();
     } else if (speech_length >= ms_to_samples(config.max_speech_ms)) {
         cut_long_segment();
+    } else if (!is_long && paused_samples == 0 && config.early_silence_ms != 0 && callbacks.on_pause &&
+               silence_samples >= ms_to_samples(config.early_silence_ms) &&
+               speech_length - silence_samples >= ms_to_samples(config.min_speech_ms)) {
+        // 긴 발화는 확정까지 기다리는 시간이 이미 짧아 미리 알려서 얻는 것이 없다.
+        paused_samples = segment.size();
+        callbacks.on_pause(std::span<const float>(segment.data(), paused_samples));
+    }
+}
+
+void VadSegmenter::Impl::cancel_pause() {
+    if (paused_samples == 0) {
+        return;
+    }
+    paused_samples = 0;
+    if (callbacks.on_resume) {
+        callbacks.on_resume();
     }
 }
 
@@ -91,7 +114,9 @@ void VadSegmenter::Impl::cut_long_segment() {
     const auto cut_window = static_cast<size_t>(weakest - speech_probabilities.begin()) + 1;
     const size_t cut_samples = lead_samples + cut_window * WINDOW_SAMPLES;
 
-    on_segment(std::span<const float>(segment.data(), cut_samples));
+    cancel_pause();
+    callbacks.on_segment(std::span<const float>(segment.data(), cut_samples),
+                         samples_to_ms(segment.size() - cut_samples));
 
     segment.erase(segment.begin(), segment.begin() + static_cast<std::ptrdiff_t>(cut_samples));
     speech_probabilities.erase(speech_probabilities.begin(),
@@ -102,18 +127,20 @@ void VadSegmenter::Impl::cut_long_segment() {
 
 void VadSegmenter::Impl::end_segment() {
     // 끝에 붙은 무음은 speech_pad_ms 분량만 남긴다.
+    // on_pause로 미리 알린 구간이 있으면, 받은 쪽이 그 처리 결과를 그대로 쓸 수 있게 똑같은 구간을 내보낸다.
     const size_t pad_samples = ms_to_samples(config.speech_pad_ms);
     const size_t trimmed = silence_samples > pad_samples ? silence_samples - pad_samples : 0;
-    const size_t length = segment.size() - trimmed;
+    const size_t length = paused_samples != 0 ? paused_samples : segment.size() - trimmed;
 
     const size_t speech_samples = segment.size() - lead_samples - silence_samples;
     if (speech_samples >= ms_to_samples(config.min_speech_ms)) {
-        on_segment(std::span<const float>(segment.data(), length));
+        callbacks.on_segment(std::span<const float>(segment.data(), length), samples_to_ms(silence_samples));
     }
 
     segment.clear();
     speech_probabilities.clear();
     silence_samples = 0;
+    paused_samples = 0;
     in_speech = false;
     whisper_vad_reset_state(context);
 }
@@ -126,8 +153,7 @@ VadSegmenter::~VadSegmenter() {
     }
 }
 
-bool VadSegmenter::init(const std::filesystem::path& model_path, const VadConfig& config,
-                        SegmentCallback on_segment) {
+bool VadSegmenter::init(const std::filesystem::path& model_path, const VadConfig& config, VadCallbacks callbacks) {
     quiet_whisper_log();
 
     whisper_vad_context_params params = whisper_vad_default_context_params();
@@ -141,7 +167,7 @@ bool VadSegmenter::init(const std::filesystem::path& model_path, const VadConfig
     whisper_vad_reset_state(impl_->context);
 
     impl_->config = config;
-    impl_->on_segment = std::move(on_segment);
+    impl_->callbacks = std::move(callbacks);
     return true;
 }
 

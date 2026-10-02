@@ -106,7 +106,7 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
     return true;
 }
 
-std::string SpeechRecognizer::transcribe(std::span<const float> samples) {
+std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::stop_token stop) {
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.language = impl_->config.language.c_str();
     if (!impl_->config.vocabulary_hint.empty()) {
@@ -118,8 +118,19 @@ std::string SpeechRecognizer::transcribe(std::span<const float> samples) {
     params.no_timestamps = true;
     params.single_segment = true;
     params.print_progress = false;
+    params.abort_callback = [](void* data) {
+        const bool stop_requested = static_cast<std::stop_token*>(data)->stop_requested();
+        if (stop_requested) {
+            // 요청받은 중단은 오류가 아니다. whisper.cpp가 중단하면서 남기는 실패 로그를 숨긴다.
+            mute_whisper_log_on_this_thread(true);
+        }
+        return stop_requested;
+    };
+    params.abort_callback_user_data = &stop;
 
-    if (whisper_full(impl_->context, params, samples.data(), static_cast<int>(samples.size())) != 0) {
+    const int result = whisper_full(impl_->context, params, samples.data(), static_cast<int>(samples.size()));
+    mute_whisper_log_on_this_thread(false);
+    if (result != 0 || stop.stop_requested()) {
         return {};
     }
 
