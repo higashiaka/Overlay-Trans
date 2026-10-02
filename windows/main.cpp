@@ -37,10 +37,15 @@ namespace {
 using namespace overlay_trans;
 using Clock = std::chrono::steady_clock;
 
+constexpr const char* DEFAULT_VAD_MODEL = "ggml-silero-v6.2.0.bin";
+constexpr const char* DEFAULT_STT_MODEL = "ggml-large-v3-turbo-q5_0.bin";
+constexpr const char* DEFAULT_LLM_MODEL = "gemma-3-4b-it-Q4_K_M.gguf";
+
 struct Options {
-    std::filesystem::path vad_model = "core/models/ggml-silero-v6.2.0.bin";
-    std::filesystem::path stt_model = "core/models/ggml-base.bin";
-    std::filesystem::path llm_model = "core/models/gemma-3-4b-it-Q4_K_M.gguf";
+    // 지정하지 않으면 모델 폴더(default_models_folder)의 기본 모델을 쓴다.
+    std::filesystem::path vad_model;
+    std::filesystem::path stt_model;
+    std::filesystem::path llm_model;
     std::filesystem::path input_file;  // 비어 있으면 시스템 오디오를 캡처한다.
     std::filesystem::path dump_wav;    // 비어 있으면 덤프하지 않는다.
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
@@ -53,13 +58,30 @@ struct Options {
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
     int llm_gpu_layers = -1;  // 번역 모델에서 GPU에 올릴 층 수. -1이면 전부.
-    int stt_audio_context = 0;  // STT가 한 번에 계산하는 길이(한 칸에 20ms). 0이면 모델 기본값(30초).
+    // STT가 한 번에 계산하는 길이(한 칸에 20ms). 발화는 길어야 6초 남짓이므로 모델 기본값(1500칸=30초)의
+    // 절반으로 줄여 인식 시간을 1/3로 줄인다. 0이면 모델 기본값을 쓴다.
+    int stt_audio_context = 768;
 };
 
 // 콘솔 출력 코드 페이지(UTF-8)에 맞춰 경로를 문자열로 바꾼다.
 std::string to_utf8(const std::filesystem::path& path) {
     const std::u8string text = path.u8string();
     return std::string(text.begin(), text.end());
+}
+
+// 기본 모델을 찾을 폴더. 설치된 앱은 실행 파일 옆의 models 폴더에 모델을 둔다.
+// 그 폴더가 없으면 저장소 루트에서 실행한 것으로 보고 core/models를 쓴다.
+std::filesystem::path default_models_folder() {
+    wchar_t exe_path[MAX_PATH];
+    const DWORD length = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        const std::filesystem::path installed = std::filesystem::path(exe_path).parent_path() / "models";
+        std::error_code error;
+        if (std::filesystem::is_directory(installed, error)) {
+            return installed;
+        }
+    }
+    return "core/models";
 }
 
 Options parse_options(int argc, wchar_t** argv) {
@@ -100,6 +122,17 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (name == L"--llm-gpu-layers") {
             options.llm_gpu_layers = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         }
+    }
+
+    const std::filesystem::path models_folder = default_models_folder();
+    if (options.vad_model.empty()) {
+        options.vad_model = models_folder / DEFAULT_VAD_MODEL;
+    }
+    if (options.stt_model.empty()) {
+        options.stt_model = models_folder / DEFAULT_STT_MODEL;
+    }
+    if (options.llm_model.empty()) {
+        options.llm_model = models_folder / DEFAULT_LLM_MODEL;
     }
     return options;
 }
@@ -283,6 +316,7 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
 int wmain(int argc, wchar_t** argv) {
     // 인식 결과(UTF-8)가 콘솔에서 깨지지 않게 한다.
     SetConsoleOutputCP(CP_UTF8);
+    std::printf("OverLay-Trans %s\n", OVERLAY_TRANS_VERSION);
 
     const Options options = parse_options(argc, argv);
     const CaptureConfig config;
