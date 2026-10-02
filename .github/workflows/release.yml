@@ -1,0 +1,76 @@
+# v로 시작하는 태그를 올리면 Windows 설치 프로그램을 만들어 릴리즈 초안에 올린다.
+# Actions 탭에서 직접 실행하면 설치 프로그램만 만들어 실행 결과(Artifacts)에 올린다.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Vulkan SDK 설치
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $installer = Join-Path $env:RUNNER_TEMP "vulkan-sdk.exe"
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile $installer
+          $install = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList `
+            "--root", "C:\VulkanSDK", "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          if ($install.ExitCode -ne 0) {
+            throw "Vulkan SDK install failed with exit code $($install.ExitCode)"
+          }
+          "VULKAN_SDK=C:\VulkanSDK" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "C:\VulkanSDK\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 빌드
+        shell: pwsh
+        run: |
+          cmake --preset windows-x64-vulkan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset windows-x64-vulkan --target OverlayTransWin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 설치할 파일 모으기
+        id: package
+        shell: pwsh
+        run: |
+          $version = ./installer/package.ps1 | Select-Object -Last 1
+          # 태그로 실행했으면 태그와 CMakeLists.txt의 버전이 같아야 한다.
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match the project version $version"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: 설치 프로그램 만들기
+        shell: pwsh
+        run: |
+          choco upgrade innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.package.outputs.version }}" installer\OverlayTrans.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OverlayTrans-Setup-${{ steps.package.outputs.version }}
+          path: build/installer/*.exe
+          if-no-files-found: error
+
+      # 초안으로 올린다. 내용을 확인한 뒤 GitHub에서 직접 공개한다.
+      - name: 릴리즈 초안 만들기
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $file = Get-Item build/installer/*.exe
+          gh release create $env:GITHUB_REF_NAME $file.FullName --draft --generate-notes --title "OverLay-Trans ${{ steps.package.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
