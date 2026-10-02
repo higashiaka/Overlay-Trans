@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace overlay_trans {
@@ -25,55 +26,125 @@ void log_warnings_only(ggml_log_level level, const char* text, void*) {
     }
 }
 
-std::string build_instruction(std::string_view target_language, std::string_view text) {
-    std::string instruction = "You are a real-time subtitle translator for live streams. ";
-    instruction += "Translate the following speech-recognition text into natural, colloquial ";
-    instruction += target_language;
-    instruction += ". Output only the translation, with no explanations or quotes.\n\n";
-    instruction += text;
-    return instruction;
+std::string build_system_prompt(const TranslatorConfig& config) {
+    std::string prompt = "You are a subtitle translator for a live stream. ";
+    prompt += "Each user message is one line of speech-recognition text. ";
+    prompt += "Reply with only its natural, colloquial " + config.target_language + " translation. ";
+    prompt += "Stay faithful to the original: do not add, explain, or answer anything. ";
+    prompt += "Earlier lines are context for understanding the current one.";
+
+    if (!config.glossary.empty()) {
+        prompt += "\n\nGlossary (always use these translations):\n" + config.glossary;
+    }
+    return prompt;
+}
+
+std::string trim(const std::string& text) {
+    const auto first = text.find_first_not_of(" \n\r\t");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = text.find_last_not_of(" \n\r\t");
+    return text.substr(first, last - first + 1);
 }
 
 }  // namespace
 
 struct Translator::Impl {
+    struct Line {
+        std::string source;
+        std::string translation;
+    };
+
     llama_model* model = nullptr;
     llama_context* context = nullptr;
     llama_sampler* sampler = nullptr;
     const llama_vocab* vocab = nullptr;
     TranslatorConfig config;
 
-    std::string apply_chat_template(const std::string& instruction) const;
-    std::vector<llama_token> tokenize(const std::string& prompt) const;
+    std::string system_prompt;
+    std::vector<Line> history;         // 모델의 메모리에 들어 있는 이전 문장들
+    size_t formatted_history_size = 0;  // history까지를 대화 형식으로 만든 문자열의 길이
+
+    // history 뒤에 current_source를 붙인 대화를 모델의 형식으로 만든다.
+    // add_reply_start가 true면 모델이 답을 시작할 위치까지 포함한다.
+    std::string format_chat(const std::string* current_source, bool add_reply_start) const;
+    std::vector<llama_token> tokenize(const std::string& text, bool is_first) const;
+    bool fits_in_context(size_t new_token_count) const;
+    void forget_old_lines();
+    std::string generate();
 };
 
-std::string Translator::Impl::apply_chat_template(const std::string& instruction) const {
-    const llama_chat_message message{"user", instruction.c_str()};
-    const char* chat_template = llama_model_chat_template(model, nullptr);
-
-    std::string prompt(instruction.size() + 256, '\0');
-    int32_t length = llama_chat_apply_template(chat_template, &message, 1, true, prompt.data(),
-                                               static_cast<int32_t>(prompt.size()));
-    if (length > static_cast<int32_t>(prompt.size())) {
-        prompt.resize(static_cast<size_t>(length));
-        length = llama_chat_apply_template(chat_template, &message, 1, true, prompt.data(),
-                                           static_cast<int32_t>(prompt.size()));
+std::string Translator::Impl::format_chat(const std::string* current_source, bool add_reply_start) const {
+    std::vector<llama_chat_message> messages;
+    messages.push_back({"system", system_prompt.c_str()});
+    for (const Line& line : history) {
+        messages.push_back({"user", line.source.c_str()});
+        messages.push_back({"assistant", line.translation.c_str()});
     }
-    prompt.resize(static_cast<size_t>(std::max(length, 0)));
+    if (current_source != nullptr) {
+        messages.push_back({"user", current_source->c_str()});
+    }
+
+    const char* chat_template = llama_model_chat_template(model, nullptr);
+    std::string formatted(1024, '\0');
+    int32_t length = llama_chat_apply_template(chat_template, messages.data(), messages.size(), add_reply_start,
+                                               formatted.data(), static_cast<int32_t>(formatted.size()));
+    if (length > static_cast<int32_t>(formatted.size())) {
+        formatted.resize(static_cast<size_t>(length));
+        length = llama_chat_apply_template(chat_template, messages.data(), messages.size(), add_reply_start,
+                                           formatted.data(), static_cast<int32_t>(formatted.size()));
+    }
+    formatted.resize(static_cast<size_t>(std::max(length, 0)));
 
     // Qwen 계열처럼 답하기 전에 생각 과정을 출력하는 모델은, 빈 생각 블록을 미리 넣어 바로 답하게 한다.
-    if (chat_template != nullptr && std::string_view(chat_template).find("enable_thinking") != std::string_view::npos) {
-        prompt += "<think>\n\n</think>\n\n";
+    if (add_reply_start && chat_template != nullptr &&
+        std::string_view(chat_template).find("enable_thinking") != std::string_view::npos) {
+        formatted += "<think>\n\n</think>\n\n";
     }
-    return prompt;
+    return formatted;
 }
 
-std::vector<llama_token> Translator::Impl::tokenize(const std::string& prompt) const {
-    std::vector<llama_token> tokens(prompt.size() + 8);
-    const int32_t count = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), tokens.data(),
-                                         static_cast<int32_t>(tokens.size()), true, true);
+std::vector<llama_token> Translator::Impl::tokenize(const std::string& text, bool is_first) const {
+    std::vector<llama_token> tokens(text.size() + 8);
+    const int32_t count = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), tokens.data(),
+                                         static_cast<int32_t>(tokens.size()), is_first, true);
     tokens.resize(static_cast<size_t>(std::max(count, 0)));
     return tokens;
+}
+
+bool Translator::Impl::fits_in_context(size_t new_token_count) const {
+    const auto used = static_cast<size_t>(llama_memory_seq_pos_max(llama_get_memory(context), 0) + 1);
+    return used + new_token_count + static_cast<size_t>(config.max_output_tokens) <= llama_n_ctx(context);
+}
+
+void Translator::Impl::forget_old_lines() {
+    if (history.size() > config.context_lines) {
+        history.erase(history.begin(), history.end() - static_cast<std::ptrdiff_t>(config.context_lines));
+    }
+    llama_memory_clear(llama_get_memory(context), true);
+    formatted_history_size = 0;
+}
+
+std::string Translator::Impl::generate() {
+    std::string text;
+    for (int i = 0; i < config.max_output_tokens; ++i) {
+        llama_token token = llama_sampler_sample(sampler, context, -1);
+        if (llama_vocab_is_eog(vocab, token)) {
+            break;
+        }
+
+        char piece[PIECE_BUFFER_SIZE];
+        const int32_t length = llama_token_to_piece(vocab, token, piece, sizeof(piece), 0, false);
+        if (length > 0) {
+            text.append(piece, static_cast<size_t>(length));
+        }
+
+        if (llama_decode(context, llama_batch_get_one(&token, 1)) != 0) {
+            break;
+        }
+    }
+    return trim(text);
 }
 
 Translator::Translator() : impl_(std::make_unique<Impl>()) {}
@@ -121,49 +192,39 @@ bool Translator::init(const std::filesystem::path& model_path, const TranslatorC
     llama_sampler_chain_add(impl_->sampler, llama_sampler_init_greedy());
 
     impl_->config = config;
+    impl_->system_prompt = build_system_prompt(config);
     return true;
 }
 
 std::string Translator::translate(std::string_view text) {
-    const std::string prompt =
-        impl_->apply_chat_template(build_instruction(impl_->config.target_language, text));
-    std::vector<llama_token> tokens = impl_->tokenize(prompt);
+    const std::string source(text);
+
+    // 이전 문장들은 이미 모델의 메모리에 있으므로, 새로 늘어난 부분만 이어서 넣는다.
+    std::string formatted = impl_->format_chat(&source, true);
+    std::vector<llama_token> tokens =
+        impl_->tokenize(formatted.substr(impl_->formatted_history_size), impl_->formatted_history_size == 0);
+
+    // 메모리가 차면 오래된 문장을 버리고 최근 문장들만으로 다시 시작한다.
+    if (!impl_->fits_in_context(tokens.size())) {
+        impl_->forget_old_lines();
+        formatted = impl_->format_chat(&source, true);
+        tokens = impl_->tokenize(formatted, true);
+    }
     if (tokens.empty()) {
         return {};
     }
 
-    // 문장마다 독립적으로 번역하므로 이전 문장의 상태를 지운다.
-    llama_memory_clear(llama_get_memory(impl_->context), true);
-
     if (llama_decode(impl_->context, llama_batch_get_one(tokens.data(), static_cast<int32_t>(tokens.size()))) != 0) {
+        impl_->history.clear();
+        impl_->forget_old_lines();
         return {};
     }
 
-    std::string translation;
-    for (int i = 0; i < impl_->config.max_output_tokens; ++i) {
-        llama_token token = llama_sampler_sample(impl_->sampler, impl_->context, -1);
-        if (llama_vocab_is_eog(impl_->vocab, token)) {
-            break;
-        }
+    std::string translation = impl_->generate();
 
-        char piece[PIECE_BUFFER_SIZE];
-        const int32_t length = llama_token_to_piece(impl_->vocab, token, piece, sizeof(piece), 0, false);
-        if (length > 0) {
-            translation.append(piece, static_cast<size_t>(length));
-        }
-
-        if (llama_decode(impl_->context, llama_batch_get_one(&token, 1)) != 0) {
-            break;
-        }
-    }
-
-    // 모델이 앞뒤에 붙이는 공백과 줄바꿈을 제거한다.
-    const auto first = translation.find_first_not_of(" \n\r\t");
-    if (first == std::string::npos) {
-        return {};
-    }
-    const auto last = translation.find_last_not_of(" \n\r\t");
-    return translation.substr(first, last - first + 1);
+    impl_->history.push_back({source, translation});
+    impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
+    return translation;
 }
 
 }  // namespace overlay_trans

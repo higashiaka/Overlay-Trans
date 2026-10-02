@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -33,6 +35,7 @@ struct Options {
     std::filesystem::path llm_model = "core/models/gemma-3-4b-it-Q4_K_M.gguf";
     std::filesystem::path input_file;  // 비어 있으면 시스템 오디오를 캡처한다.
     std::filesystem::path dump_wav;    // 비어 있으면 덤프하지 않는다.
+    std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
@@ -61,6 +64,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.input_file = value;
         } else if (name == L"--dump-wav") {
             options.dump_wav = value;
+        } else if (name == L"--glossary") {
+            options.glossary = value;
         } else if (name == L"--language") {
             options.language = to_utf8(value);
         } else if (name == L"--stt-hint") {
@@ -74,6 +79,16 @@ Options parse_options(int argc, wchar_t** argv) {
         }
     }
     return options;
+}
+
+// UTF-8 텍스트 파일 전체를 읽는다. 열 수 없으면 false를 반환한다.
+bool read_text_file(const std::filesystem::path& path, std::string& text) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    return true;
 }
 
 double to_seconds(Clock::duration duration) {
@@ -203,10 +218,14 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     Translator translator;
-    const TranslatorConfig translator_config{
+    TranslatorConfig translator_config{
         .gpu_layers = options.use_gpu ? options.llm_gpu_layers : 0,
         .gpu_device = options.gpu_device,
     };
+    if (!options.glossary.empty() && !read_text_file(options.glossary, translator_config.glossary)) {
+        std::fprintf(stderr, "Failed to read glossary file: %s\n", to_utf8(options.glossary).c_str());
+        return 1;
+    }
     if (!translator.init(options.llm_model, translator_config)) {
         std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
         return 1;

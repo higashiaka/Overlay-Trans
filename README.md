@@ -83,7 +83,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
   - Dear ImGui + DirectX/OpenGL 렌더링 백엔드 연동
   - 자막 텍스트 렌더링(폰트, 스타일, 페이드 인/아웃 애니메이션) 구현
   - 자막 위치/크기/투명도 조절이 가능한 사용자 설정 UI 추가
-  - E2E 통합 테스트: 캡처 → VAD → STT → LLM → 오버레이 전체 파이프라인 지연 시간(목표 500ms 이하) 측정
+  - E2E 통합 테스트: 캡처 → VAD → STT → LLM → 오버레이 전체 파이프라인 지연 시간(목표: 발화가 끝난 뒤 약 1.5초 이내) 측정
 - **Step 6: 화자 분리 (Speaker Diarization)**
   - sherpa-onnx 연동 및 화자 임베딩 모델 선정
   - VAD가 검출한 발화 구간마다 화자 임베딩을 추출하고, 기존 화자와 비교해 화자 번호 부여
@@ -203,6 +203,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 
 # STT에 자주 나오는 이름과 용어를 미리 알려 주면 그 표기로 인식될 확률이 올라감
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-hint "ビッツ、サブスク、ギフト"
+
+# 번역 용어집: UTF-8 텍스트 파일에 한 줄에 하나씩 "원문 = 번역" 형식으로 적음 (예: 明後日 = 모레)
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossary glossary.txt
 
 # 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음
