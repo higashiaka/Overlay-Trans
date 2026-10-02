@@ -9,6 +9,8 @@ const PAIRING_CODE_PATTERN = /^(\d{2,5})-([0-9A-Z]{16})$/;
 const ports = new Set();
 let status = "idle"; // idle | unpaired | connected | rejected | disconnected
 let polling = false;
+// 방송 탭이 마지막으로 알려 준 진단 정보 (찾은 채팅 줄 수, 보낸 채팅 수).
+let diagnostics = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,6 +30,24 @@ async function request(pairing, path) {
   return fetch(`http://127.0.0.1:${pairing.port}${path}`, {
     headers: { Authorization: `Bearer ${pairing.key}` },
   });
+}
+
+// 방송 페이지에서 읽은 내용(방송 정보, 채팅)을 앱으로 보낸다.
+// 앱이 꺼져 있으면 실패하지만, 지나간 채팅을 나중에 보내 봐야 쓸모가 없으므로 다시 보내지 않는다.
+async function post(path, body) {
+  const pairing = await loadPairing();
+  if (!pairing) {
+    return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pairing.port}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pairing.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // 연결 상태는 자막을 받아 오는 쪽에서 관리한다.
+  }
 }
 
 function broadcast(message) {
@@ -99,8 +119,16 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   ports.add(port);
   port.postMessage({ type: "status", status });
-  // 콘텐츠 스크립트가 주기적으로 보내는 메시지는 서비스 워커가 잠들지 않게 하는 용도라 처리할 내용이 없다.
-  port.onMessage.addListener(() => {});
+  // 콘텐츠 스크립트가 주기적으로 보내는 메시지는 서비스 워커가 잠들지 않게 하는 역할도 한다.
+  port.onMessage.addListener((message) => {
+    if (message?.type === "context") {
+      post("/v1/context", message.context);
+    } else if (message?.type === "chat") {
+      post("/v1/chat", { messages: message.messages });
+    } else if (message?.type === "diagnostics") {
+      diagnostics = message.diagnostics;
+    }
+  });
   port.onDisconnect.addListener(() => ports.delete(port));
   pollSubtitles();
 });
@@ -108,7 +136,7 @@ chrome.runtime.onConnect.addListener((port) => {
 // 팝업에서 오는 요청을 처리한다.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "getStatus") {
-    sendResponse({ status });
+    sendResponse({ status, diagnostics });
     return false;
   }
 
