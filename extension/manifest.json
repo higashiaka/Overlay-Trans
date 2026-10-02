@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "OverLay-Trans",
+  "version": "0.1.0",
+  "description": "OverLay-Trans 앱이 만든 실시간 번역 자막을 방송 영상 위에 표시합니다.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "OverLay-Trans",
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.twitch.tv/*"],
+      "js": ["content/sites/twitch.js", "content/overlay.js", "content/main.js"],
+      "css": ["content/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

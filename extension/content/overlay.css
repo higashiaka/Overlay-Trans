@@ -1,0 +1,40 @@
+#overlay-trans-root {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 90%;
+  /* 자막이 플레이어 조작(재생, 음량 등)을 가로막지 않게 한다. */
+  pointer-events: none;
+}
+
+.overlay-trans-line {
+  max-width: 100%;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #ffffff;
+  text-align: center;
+  line-height: 1.35;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.overlay-trans-translation {
+  font-size: clamp(16px, 2vw, 32px);
+  font-weight: 600;
+}
+
+.overlay-trans-source {
+  font-size: clamp(11px, 1.1vw, 18px);
+  opacity: 0.75;
+}
+
+.overlay-trans-hide-source .overlay-trans-source {
+  display: none;
+}

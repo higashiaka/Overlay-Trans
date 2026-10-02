@@ -105,6 +105,10 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 │   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio)
 │   ├── ui/                        # Dear ImGui 기반 투명 오버레이 렌더링
 │   └── main.cpp                   # 윈도우 실행 진입점
+├── extension/                     # [브라우저] 영상 위에 자막을 표시하는 확장 프로그램
+│   ├── background.js              # 앱의 로컬 서버에서 자막을 받아 페이지로 전달
+│   ├── content/                   # 자막 표시 (sites/ 아래에 사이트별 화면 구조 코드)
+│   └── popup/                     # 페어링 코드 입력과 설정
 └── third_party/                   # 서브모듈로 관리하는 외부 라이브러리 (miniaudio, whisper.cpp, llama.cpp)
 ```
 
@@ -216,9 +220,19 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
 
-### 브라우저 확장 프로그램 연동 (준비 중)
+### 브라우저 확장 프로그램 (트위치)
 
-앱은 실행되면 이 PC 안에서만 접속할 수 있는 로컬 서버(`127.0.0.1:47815`)를 열고, 시작할 때 페어링 코드를 출력합니다. 확장 프로그램에 이 코드를 한 번 입력하면 자막을 받아 갈 수 있습니다.
+`extension/` 폴더의 확장 프로그램이 앱에서 자막을 받아 트위치 영상 위에 표시합니다. 크롬 기반 브라우저(크롬, 웨일, 엣지)에서 동작합니다.
+
+1. 브라우저 주소창에 `chrome://extensions`(웨일은 `whale://extensions`)를 입력해 엽니다.
+2. "개발자 모드"를 켜고 "압축해제된 확장 프로그램을 로드합니다"를 눌러 `extension` 폴더를 선택합니다.
+3. 앱을 실행하고, 콘솔에 출력된 `Pairing code: ...` 값을 복사합니다.
+4. 브라우저의 확장 프로그램 아이콘을 눌러 페어링 코드를 입력하고 "연결"을 누릅니다. (한 번만 하면 됩니다.)
+5. 트위치 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
+
+사이트 화면 구조에 의존하는 코드는 `extension/content/sites/`에 사이트별 파일로 분리되어 있습니다.
+
+앱은 실행되면 이 PC 안에서만 접속할 수 있는 로컬 서버(`127.0.0.1:47815`)를 열고, 시작할 때 페어링 코드를 출력합니다.
 
 - 페어링 코드는 `포트-키` 형식이며, 키는 `%LOCALAPPDATA%\OverlayTrans\pairing-token.txt`에 저장되어 다음 실행에도 그대로 쓰입니다.
 - 키가 맞지 않는 요청과 일반 웹페이지에서 온 요청은 거부합니다.
