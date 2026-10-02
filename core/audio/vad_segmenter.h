@@ -25,10 +25,22 @@ struct VadConfig {
     uint32_t early_silence_ms = 160;
 };
 
+// 잘라낸 발화 구간 하나.
+struct SpeechSegment {
+    std::span<const float> samples;
+    // 구간의 마지막 샘플이 들어온 뒤 끝났다고 판단하기까지 흐른 시간.
+    uint32_t waited_ms = 0;
+    // 직전 구간의 말소리가 끝난 뒤 이 구간의 말소리가 시작하기까지 이어진 무음의 길이.
+    // 짧을수록 직전 구간에서 이어진 말일 가능성이 높다. 직전 구간이 없으면 NO_PREVIOUS_SEGMENT다.
+    uint32_t silence_before_ms = NO_PREVIOUS_SEGMENT;
+
+    static constexpr uint32_t NO_PREVIOUS_SEGMENT = UINT32_MAX;
+};
+
 // 모든 콜백은 process나 flush를 호출한 스레드에서 호출된다.
 struct VadCallbacks {
-    // 발화가 끝났다. waited_ms는 구간의 마지막 샘플이 들어온 뒤 끝났다고 판단하기까지 흐른 시간이다.
-    std::function<void(std::span<const float> samples, uint32_t waited_ms)> on_segment;
+    // 발화가 끝났다.
+    std::function<void(const SpeechSegment& segment)> on_segment;
 
     // 말이 잠깐 멈췄다. 여기서 발화가 끝날 수 있으므로 받은 쪽은 이 구간의 처리를 미리 시작해도 된다.
     // 그대로 끝나면 똑같은 구간으로 on_segment가, 말이 다시 이어지면 on_resume이 호출된다. (비워 두어도 된다.)

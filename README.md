@@ -219,6 +219,13 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 # 말이 잠깐 멈추면 발화가 끝났다고 확정되기 전에 인식을 미리 시작해 자막을 앞당김 (기본으로 켜짐). 끄려면 off
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-stt off
 
+# 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
+
+# STT가 한 번에 계산하는 길이를 줄여 인식을 빠르게 함 (한 칸에 20ms, 기본은 모델 전체인 1500칸=30초)
+# 768이면 인식 시간이 1/3 정도로 줄지만 인식 결과가 일부 달라짐. 발화가 더 길면 그 발화만 자동으로 늘림
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-audio-ctx 768
+
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
@@ -244,7 +251,7 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 | 요청 | 설명 |
 | --- | --- |
 | `GET /v1/ping` | 연결과 페어링 키 확인 |
-| `GET /v1/subtitles?after=<번호>` | 해당 번호 이후의 자막(원문, 번역). 없으면 새 자막이 나올 때까지 최대 20초 기다림 |
+| `GET /v1/subtitles?after=<번호>` | 해당 번호 이후의 자막(원문, 번역). 없으면 새 자막이 나올 때까지 최대 20초 기다림. 자막의 `replaces`가 0이 아니면 화면에 있는 그 번호의 자막을 이 자막으로 바꿈 |
 | `POST /v1/context` | 방송 정보 전달 (JSON: `channel`, `title`, `category`). 번역 지시문에 쓰임 |
 | `POST /v1/chat` | 새로 올라온 채팅 전달 (JSON: `messages[{name, text}]`). 앱을 `--chat-context on`으로 실행한 경우에만 직후 발화의 번역 맥락으로 쓰임 (기본은 꺼짐) |
 

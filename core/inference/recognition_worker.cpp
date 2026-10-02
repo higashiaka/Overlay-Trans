@@ -1,5 +1,6 @@
 #include "recognition_worker.h"
 
+#include "audio/vad_segmenter.h"
 #include "speech_recognizer.h"
 
 #include <condition_variable>
@@ -30,6 +31,7 @@ struct Job {
     JobState state;
     std::stop_source stop;  // 버리는 구간의 인식을 도중에 멈춘다.
     Clock::time_point speech_ended_at;
+    uint32_t silence_before_ms = 0;
 };
 
 }  // namespace
@@ -79,7 +81,8 @@ void RecognitionWorker::Impl::run(std::stop_token stop) {
 
             if (job.state == JobState::Confirmed) {
                 lock.unlock();
-                on_result({job.samples, std::move(text), job.speech_ended_at, recognition_time, started_early});
+                on_result({job.samples, std::move(text), job.speech_ended_at, recognition_time, started_early,
+                           job.silence_before_ms});
                 lock.lock();
             }
         }
@@ -125,14 +128,16 @@ void RecognitionWorker::cancel_early() {
     impl_->cancel_early();
 }
 
-void RecognitionWorker::submit(std::span<const float> samples, uint32_t waited_ms) {
-    const auto speech_ended_at = Clock::now() - std::chrono::milliseconds(waited_ms);
+void RecognitionWorker::submit(const SpeechSegment& segment) {
+    const std::span<const float> samples = segment.samples;
+    const auto speech_ended_at = Clock::now() - std::chrono::milliseconds(segment.waited_ms);
 
     std::unique_lock lock(impl_->mutex);
     if (!impl_->jobs.empty() && impl_->jobs.back().state == JobState::Early) {
         Job& early = impl_->jobs.back();
         if (early.samples.size() == samples.size()) {
             early.speech_ended_at = speech_ended_at;
+            early.silence_before_ms = segment.silence_before_ms;
             early.state = JobState::Confirmed;
             impl_->changed.notify_all();
             return;
@@ -144,7 +149,8 @@ void RecognitionWorker::submit(std::span<const float> samples, uint32_t waited_m
     impl_->changed.wait(lock, [&] { return impl_->jobs.size() < MAX_QUEUED_JOBS; });
     impl_->jobs.push_back({.samples = {samples.begin(), samples.end()},
                            .state = JobState::Confirmed,
-                           .speech_ended_at = speech_ended_at});
+                           .speech_ended_at = speech_ended_at,
+                           .silence_before_ms = segment.silence_before_ms});
     impl_->changed.notify_all();
 }
 

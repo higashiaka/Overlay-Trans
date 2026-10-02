@@ -3,6 +3,7 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -126,6 +127,7 @@ void SubtitleServer::Impl::handle_subtitles(const httplib::Request& request, htt
                     {"sequence", stored.sequence},
                     {"source", stored.subtitle.source},
                     {"translation", stored.subtitle.translation},
+                    {"replaces", stored.subtitle.replaces},
                 });
             }
         }
@@ -240,15 +242,23 @@ void SubtitleServer::stop() {
     }
 }
 
-void SubtitleServer::publish(Subtitle subtitle) {
+int64_t SubtitleServer::publish(Subtitle subtitle) {
+    int64_t sequence = 0;
     {
         std::lock_guard lock(impl_->mutex);
-        impl_->subtitles.push_back({++impl_->last_sequence, std::move(subtitle)});
+        // 대신할 자막이 아직 보관되어 있으면 지운다. 늦게 받아 가는 쪽에 같은 말이 두 번 가지 않게 한다.
+        if (subtitle.replaces != 0) {
+            std::erase_if(impl_->subtitles,
+                          [&](const StoredSubtitle& stored) { return stored.sequence == subtitle.replaces; });
+        }
+        sequence = ++impl_->last_sequence;
+        impl_->subtitles.push_back({sequence, std::move(subtitle)});
         if (impl_->subtitles.size() > MAX_STORED_SUBTITLES) {
             impl_->subtitles.pop_front();
         }
     }
     impl_->changed.notify_all();
+    return sequence;
 }
 
 }  // namespace overlay_trans

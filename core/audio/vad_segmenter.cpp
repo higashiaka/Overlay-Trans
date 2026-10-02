@@ -40,6 +40,9 @@ struct VadSegmenter::Impl {
     size_t lead_samples = 0;      // segment 앞에 붙인 pre_roll 길이
     size_t silence_samples = 0;   // 발화 끝에 이어진 무음 길이
     size_t paused_samples = 0;    // on_pause로 미리 알린 구간의 길이. 알리지 않았으면 0
+    size_t gap_samples = 0;       // 직전에 내보낸 구간의 말소리가 끝난 뒤로 이어진 무음 길이
+    bool has_previous = false;    // 직전에 내보낸 구간이 있는지
+    uint32_t silence_before_ms = SpeechSegment::NO_PREVIOUS_SEGMENT;  // 진행 중인 발화 앞의 무음 길이
     bool in_speech = false;
 
     void on_window(const float* window, float probability);
@@ -56,10 +59,12 @@ void VadSegmenter::Impl::on_window(const float* window, float probability) {
             if (pre_roll.size() > pad_samples) {
                 pre_roll.erase(pre_roll.begin(), pre_roll.end() - static_cast<std::ptrdiff_t>(pad_samples));
             }
+            gap_samples += WINDOW_SAMPLES;
             return;
         }
 
         in_speech = true;
+        silence_before_ms = has_previous ? samples_to_ms(gap_samples) : SpeechSegment::NO_PREVIOUS_SEGMENT;
         silence_samples = 0;
         lead_samples = pre_roll.size();
         segment = std::move(pre_roll);
@@ -115,8 +120,12 @@ void VadSegmenter::Impl::cut_long_segment() {
     const size_t cut_samples = lead_samples + cut_window * WINDOW_SAMPLES;
 
     cancel_pause();
-    callbacks.on_segment(std::span<const float>(segment.data(), cut_samples),
-                         samples_to_ms(segment.size() - cut_samples));
+    callbacks.on_segment({.samples = std::span<const float>(segment.data(), cut_samples),
+                          .waited_ms = samples_to_ms(segment.size() - cut_samples),
+                          .silence_before_ms = silence_before_ms});
+    // 남은 부분은 방금 내보낸 구간에서 쉬지 않고 이어지는 말이다.
+    has_previous = true;
+    silence_before_ms = 0;
 
     segment.erase(segment.begin(), segment.begin() + static_cast<std::ptrdiff_t>(cut_samples));
     speech_probabilities.erase(speech_probabilities.begin(),
@@ -134,7 +143,14 @@ void VadSegmenter::Impl::end_segment() {
 
     const size_t speech_samples = segment.size() - lead_samples - silence_samples;
     if (speech_samples >= ms_to_samples(config.min_speech_ms)) {
-        callbacks.on_segment(std::span<const float>(segment.data(), length), samples_to_ms(silence_samples));
+        callbacks.on_segment({.samples = std::span<const float>(segment.data(), length),
+                              .waited_ms = samples_to_ms(silence_samples),
+                              .silence_before_ms = silence_before_ms});
+        has_previous = true;
+        gap_samples = silence_samples;
+    } else {
+        // 버린 구간은 말이 없었던 것으로 친다.
+        gap_samples += segment.size();
     }
 
     segment.clear();
@@ -198,6 +214,8 @@ void VadSegmenter::flush() {
     if (impl_->in_speech) {
         impl_->end_segment();
     }
+    // 입력이 끊긴 동안 흐른 시간은 알 수 없으므로, 다음 발화는 새로 시작하는 말로 본다.
+    impl_->has_previous = false;
 }
 
 }  // namespace overlay_trans

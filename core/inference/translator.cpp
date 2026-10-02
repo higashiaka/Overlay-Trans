@@ -85,6 +85,10 @@ struct Translator::Impl {
         std::string source;       // 번역한 문장
         std::string message;      // 모델에 실제로 넣은 내용 (채팅 맥락이 붙어 있을 수 있다)
         std::string translation;
+        // 이 문장이 모델의 메모리와 대화 형식 문자열에서 시작하는 위치. 문장을 다시 번역할 때 여기부터 지운다.
+        // 메모리를 처음부터 다시 채운 경우처럼 위치를 알 수 없으면 memory_start가 -1이다.
+        llama_pos memory_start = -1;
+        size_t formatted_start = 0;
     };
 
     llama_model* model = nullptr;
@@ -103,8 +107,10 @@ struct Translator::Impl {
     std::vector<llama_token> tokenize(const std::string& text, bool is_first) const;
     bool fits_in_context(size_t new_token_count) const;
     void forget_old_lines();
+    void remove_last_line();
     std::string generate();
-    std::string run(const std::string& message);
+    // 방금 넣은 문장의 시작 위치를 memory_start와 formatted_start에 돌려준다.
+    std::string run(const std::string& message, llama_pos& memory_start, size_t& formatted_start);
 };
 
 std::string Translator::Impl::format_chat(const std::string* current_message, bool add_reply_start) const {
@@ -165,9 +171,22 @@ void Translator::Impl::forget_old_lines() {
     // 다시 넣을 때는 지난 채팅을 빼고 문장만 남겨 메모리를 아낀다.
     for (Line& line : history) {
         line.message = line.source;
+        line.memory_start = -1;
     }
     llama_memory_clear(llama_get_memory(context), true);
     formatted_history_size = 0;
+}
+
+void Translator::Impl::remove_last_line() {
+    const Line line = std::move(history.back());
+    history.pop_back();
+
+    // 모델의 메모리에서도 그 문장을 지운다. 지울 위치를 모르거나 지우지 못하면 처음부터 다시 채운다.
+    if (line.memory_start < 0 || !llama_memory_seq_rm(llama_get_memory(context), 0, line.memory_start, -1)) {
+        forget_old_lines();
+        return;
+    }
+    formatted_history_size = line.formatted_start;
 }
 
 std::string Translator::Impl::generate() {
@@ -268,7 +287,7 @@ void Translator::set_stream_info(const std::string& info) {
     impl_->forget_old_lines();
 }
 
-std::string Translator::translate(std::string_view text, std::span<const std::string> chat) {
+std::string Translator::translate(std::string_view text, std::span<const std::string> chat, bool replace_previous) {
     const std::string source(text);
 
     // 채팅이 있으면 번역할 문장 앞에 붙인다. 지시문에서 이 형식을 설명해 두었다.
@@ -281,7 +300,13 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
         message += "[Streamer]\n" + source;
     }
 
-    std::string translation = impl_->run(message);
+    if (replace_previous && !impl_->history.empty()) {
+        impl_->remove_last_line();
+    }
+
+    llama_pos memory_start = -1;
+    size_t formatted_start = 0;
+    std::string translation = impl_->run(message, memory_start, formatted_start);
 
     // 다른 문장인데 직전과 똑같은 번역이 나왔다면, 모델이 앞의 답을 그대로 따라 하고 있는 것이다.
     // 한번 이렇게 되면 계속 같은 말만 내놓으므로, 이전 문장들을 버리고 이 문장만 다시 번역한다.
@@ -289,25 +314,29 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
         source != impl_->history.back().source) {
         impl_->history.clear();
         impl_->forget_old_lines();
-        translation = impl_->run(message);
+        translation = impl_->run(message, memory_start, formatted_start);
     }
 
-    impl_->history.push_back({source, message, translation});
+    impl_->history.push_back({source, message, translation, memory_start, formatted_start});
     impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
     return translation;
 }
 
 // 모델의 메모리에 message를 이어 넣고 번역을 생성한다.
-std::string Translator::Impl::run(const std::string& message) {
+std::string Translator::Impl::run(const std::string& message, llama_pos& memory_start, size_t& formatted_start) {
     // 이전 문장들은 이미 모델의 메모리에 있으므로, 새로 늘어난 부분만 이어서 넣는다.
     std::string formatted = format_chat(&message, true);
     std::vector<llama_token> tokens = tokenize(formatted.substr(formatted_history_size), formatted_history_size == 0);
+    // 메모리가 비어 있으면 지시문부터 한꺼번에 넣으므로 이 문장만의 시작 위치를 알 수 없다.
+    formatted_start = formatted_history_size;
+    memory_start = formatted_history_size == 0 ? -1 : llama_memory_seq_pos_max(llama_get_memory(context), 0) + 1;
 
     // 메모리가 차면 오래된 문장을 버리고 최근 문장들만으로 다시 시작한다.
     if (!fits_in_context(tokens.size())) {
         forget_old_lines();
         formatted = format_chat(&message, true);
         tokens = tokenize(formatted, true);
+        memory_start = -1;
     }
     if (tokens.empty()) {
         return {};

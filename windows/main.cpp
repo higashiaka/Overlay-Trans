@@ -48,6 +48,7 @@ struct Options {
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
+    bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
@@ -82,6 +83,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
+        } else if (name == L"--merge-sentences") {
+            options.merge_sentences = value != L"off";
         } else if (name == L"--early-stt") {
             options.early_stt = value != L"off";
         } else if (name == L"--stt-hint") {
@@ -150,6 +153,23 @@ constexpr size_t MAX_CHAT_LINES = 3;
 constexpr size_t MAX_CHAT_LINE_BYTES = 120;
 // 이보다 오래된 채팅은 지금 하는 말과 관련이 없다고 본다.
 constexpr auto MAX_CHAT_AGE = std::chrono::seconds(30);
+
+// 긴 말은 자막이 늦지 않게 여러 구간으로 끊어서 내보낸다. 뒤 구간이 앞 구간에서 이어진 말이면,
+// 앞 구간과 합친 문장을 다시 번역해 화면의 자막을 바꾼다. 이렇게 합치고 있는 문장을 담는다.
+struct OpenSentence {
+    std::string source;             // 지금까지 합친 원문
+    std::vector<std::string> chat;  // 번역 맥락으로 쓴 채팅
+    size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
+    int64_t subtitle = 0;           // 화면에 내보낸 자막의 번호
+};
+
+// 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
+// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
+// 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
+// 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
+constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
+constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
+constexpr size_t MAX_SENTENCE_BYTES = 180;
 
 double to_seconds(Clock::duration duration) {
     return std::chrono::duration<double>(duration).count();
@@ -352,6 +372,7 @@ int wmain(int argc, wchar_t** argv) {
     // 인식과 번역은 오디오를 받는 스레드와 따로 돌린다. 인식하는 동안에도 발화 구간을 계속 찾아야
     // 다음 발화의 인식을 제때 미리 시작할 수 있다.
     const bool is_live = options.input_file.empty();
+    OpenSentence sentence;
     RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
         const auto to_ms = [](Clock::duration duration) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
@@ -390,7 +411,31 @@ int wmain(int argc, wchar_t** argv) {
             chat.erase(chat.begin(), chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
         }
 
-        const std::string translation = text.empty() ? std::string() : translator.translate(text, chat);
+        // 앞 구간에서 이어진 말이면 앞 구간과 합쳐서 다시 번역한다. 인식에 실패한 구간은 건너뛴다.
+        const bool merges = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
+                            !text.empty() &&
+                            sentence.fragment_count > 0 && sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
+                            sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
+        std::string translation;
+        if (!text.empty()) {
+            if (!merges) {
+                sentence = {};
+            }
+            // 쉬었다가 이어진 구간 사이는 띄워서 번역 모델이 경계를 알 수 있게 한다.
+            // 쉬지 않고 이어진 구간은 일본어처럼 띄어 쓰지 않는 글이면 그대로 붙인다.
+            if (!sentence.source.empty() && (speech.silence_before_ms >= vad_config.min_silence_ms ||
+                                             static_cast<unsigned char>(sentence.source.back()) < 0x80)) {
+                sentence.source += ' ';
+            }
+            sentence.source += text;
+            sentence.chat.insert(sentence.chat.end(), chat.begin(), chat.end());
+            if (sentence.chat.size() > MAX_CHAT_LINES) {
+                sentence.chat.erase(sentence.chat.begin(),
+                                    sentence.chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
+            }
+            ++sentence.fragment_count;
+            translation = translator.translate(sentence.source, sentence.chat, merges);
+        }
         const auto finished_at = Clock::now();
 
         std::printf("[%.2f s audio | STT %lld ms%s | translation %lld ms | chat %zu",
@@ -398,21 +443,25 @@ int wmain(int argc, wchar_t** argv) {
                         static_cast<double>(config.sample_rate * config.channels),
                     to_ms(speech.recognition_time), speech.started_early ? " (early)" : "",
                     to_ms(finished_at - translation_started_at), chat.size());
+        if (merges) {
+            std::printf(" | merged %zu", sentence.fragment_count);
+        }
         // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
         if (is_live) {
             std::printf(" | delay %lld ms", to_ms(finished_at - speech.speech_ended_at));
         }
-        std::printf("]\n  %s\n  %s\n", text.c_str(), translation.c_str());
+        std::printf("]\n  %s\n  %s\n", (merges ? sentence.source : text).c_str(), translation.c_str());
         std::fflush(stdout);
 
+        // 합친 문장의 번역은 화면에 있는 앞 구간의 자막을 대신한다.
         if (!translation.empty()) {
-            server.publish({text, translation});
+            sentence.subtitle = server.publish({sentence.source, translation, merges ? sentence.subtitle : 0});
         }
     });
 
     VadSegmenter vad;
     const VadCallbacks vad_callbacks{
-        .on_segment = [&](std::span<const float> samples, uint32_t waited_ms) { worker.submit(samples, waited_ms); },
+        .on_segment = [&](const SpeechSegment& segment) { worker.submit(segment); },
         .on_pause = [&](std::span<const float> samples) { worker.begin_early(samples); },
         .on_resume = [&] { worker.cancel_early(); },
     };

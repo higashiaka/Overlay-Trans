@@ -98,7 +98,13 @@ async function pollSubtitles() {
       const body = await response.json();
       setStatus("connected");
       for (const subtitle of body.subtitles) {
-        broadcast({ type: "subtitle", source: subtitle.source, translation: subtitle.translation });
+        broadcast({
+          type: "subtitle",
+          sequence: subtitle.sequence,
+          replaces: subtitle.replaces ?? 0,
+          source: subtitle.source,
+          translation: subtitle.translation,
+        });
       }
       after = body.latest;
     } catch {
