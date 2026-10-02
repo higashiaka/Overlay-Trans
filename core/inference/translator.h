@@ -16,9 +16,13 @@ struct TranslatorConfig {
     int gpu_device = 0;
     uint32_t context_size = 2048;
     int max_output_tokens = 128;
+    // 모델의 메모리가 차서 다시 시작할 때 맥락으로 남겨 둘 이전 문장 수.
+    size_t context_lines = 6;
+    // 고정해서 쓸 번역 표기. 한 줄에 하나씩 "원문 = 번역" 형식으로 적는다. (UTF-8)
+    std::string glossary;
 };
 
-// llama.cpp로 인식된 문장을 번역한다.
+// llama.cpp로 인식된 문장을 번역한다. 앞서 번역한 문장들을 맥락으로 함께 사용한다.
 class Translator {
 public:
     Translator();
