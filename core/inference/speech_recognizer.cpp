@@ -18,6 +18,9 @@ namespace {
 // 스레드를 물리 코어 수 이상으로 늘려도 whisper.cpp는 빨라지지 않는다.
 constexpr unsigned int MAX_THREADS = 8;
 
+// whisper 인코더 출력 한 칸에 해당하는 샘플 수(16kHz에서 20ms).
+constexpr size_t SAMPLES_PER_AUDIO_CONTEXT = 320;
+
 // 문장 부호를 뺀 형태로 적는다. (remove_punctuation의 결과와 비교한다.)
 constexpr std::string_view KNOWN_HALLUCINATIONS[] = {
     "ご視聴ありがとうございました",
@@ -118,6 +121,11 @@ std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::st
     params.no_timestamps = true;
     params.single_segment = true;
     params.print_progress = false;
+    if (impl_->config.audio_context > 0) {
+        const int needed = static_cast<int>(samples.size() / SAMPLES_PER_AUDIO_CONTEXT) + 1;
+        params.audio_ctx = std::min(std::max(impl_->config.audio_context, needed),
+                                    whisper_model_n_audio_ctx(impl_->context));
+    }
     params.abort_callback = [](void* data) {
         const bool stop_requested = static_cast<std::stop_token*>(data)->stop_requested();
         if (stop_requested) {

@@ -52,6 +52,7 @@ struct Options {
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
     int llm_gpu_layers = -1;  // 번역 모델에서 GPU에 올릴 층 수. -1이면 전부.
+    int stt_audio_context = 0;  // STT가 한 번에 계산하는 길이(한 칸에 20ms). 0이면 모델 기본값(30초).
 };
 
 // 콘솔 출력 코드 페이지(UTF-8)에 맞춰 경로를 문자열로 바꾼다.
@@ -91,6 +92,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.port = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         } else if (name == L"--gpu-device") {
             options.gpu_device = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
+        } else if (name == L"--stt-audio-ctx") {
+            options.stt_audio_context = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         } else if (name == L"--llm-gpu-layers") {
             options.llm_gpu_layers = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         }
@@ -274,6 +277,7 @@ int wmain(int argc, wchar_t** argv) {
         .vocabulary_hint = options.stt_hint,
         .use_gpu = options.use_gpu,
         .gpu_device = options.gpu_device,
+        .audio_context = options.stt_audio_context,
     };
     if (!recognizer.init(options.stt_model, stt_config)) {
         std::fprintf(stderr, "Failed to load STT model: %s\n", to_utf8(options.stt_model).c_str());

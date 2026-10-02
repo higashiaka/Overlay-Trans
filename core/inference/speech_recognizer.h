@@ -17,6 +17,9 @@ struct SttConfig {
     bool use_gpu = true;
     // 외장 GPU가 여러 개일 때 몇 번째를 쓸지. 내장 GPU는 세지 않는다.
     int gpu_device = 0;
+    // whisper는 발화가 짧아도 항상 30초 분량(1500칸, 한 칸에 20ms)을 계산한다. 이 값만큼만 계산하게 줄이면
+    // 인식이 그만큼 빨라진다. 발화가 이보다 길면 그 발화에 한해 필요한 만큼 늘린다. 0이면 줄이지 않는다.
+    int audio_context = 0;
 };
 
 // whisper.cpp로 발화 구간을 텍스트로 변환한다.
