@@ -37,6 +37,7 @@ struct Options {
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
+    int llm_gpu_layers = -1;  // 번역 모델에서 GPU에 올릴 층 수. -1이면 전부.
 };
 
 // 콘솔 출력 코드 페이지(UTF-8)에 맞춰 경로를 문자열로 바꾼다.
@@ -68,6 +69,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.use_gpu = value != L"cpu";
         } else if (name == L"--gpu-device") {
             options.gpu_device = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
+        } else if (name == L"--llm-gpu-layers") {
+            options.llm_gpu_layers = static_cast<int>(std::wcstol(argv[i + 1], nullptr, 10));
         }
     }
     return options;
@@ -201,7 +204,7 @@ int wmain(int argc, wchar_t** argv) {
 
     Translator translator;
     const TranslatorConfig translator_config{
-        .use_gpu = options.use_gpu,
+        .gpu_layers = options.use_gpu ? options.llm_gpu_layers : 0,
         .gpu_device = options.gpu_device,
     };
     if (!translator.init(options.llm_model, translator_config)) {

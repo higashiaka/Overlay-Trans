@@ -10,8 +10,9 @@ namespace overlay_trans {
 
 struct TranslatorConfig {
     std::string target_language = "Korean";
+    // GPU에 올릴 층 수. -1이면 전부, 0이면 CPU만 쓴다. VRAM이 모자라면 일부만 올리는 편이 빠르다.
     // GPU 백엔드(Vulkan)를 포함해 빌드한 경우에만 효과가 있다.
-    bool use_gpu = true;
+    int gpu_layers = -1;
     int gpu_device = 0;
     uint32_t context_size = 2048;
     int max_output_tokens = 128;
