@@ -12,9 +12,14 @@ namespace overlay_trans {
 struct VadConfig {
     float threshold = 0.5f;          // 이 확률 이상이면 음성으로 본다.
     uint32_t min_speech_ms = 250;    // 이보다 짧은 발화는 버린다.
-    uint32_t min_silence_ms = 500;   // 이만큼 무음이 이어지면 발화가 끝난 것으로 본다.
+    uint32_t min_silence_ms = 320;   // 이만큼 무음이 이어지면 발화가 끝난 것으로 본다.
     uint32_t speech_pad_ms = 200;    // 발화 앞뒤에 남겨 두는 여유 구간.
-    uint32_t max_speech_ms = 15000;  // 이보다 길어지면 강제로 끊는다.
+
+    // 길게 이어지는 말은 끝날 때까지 기다리면 자막이 너무 늦어지므로 중간에 끊는다.
+    uint32_t long_speech_ms = 1500;          // 발화가 이보다 길어지면 짧은 쉼에서도 끊는다.
+    uint32_t long_speech_silence_ms = 128;   // 긴 발화를 끊는 데 필요한 무음 길이.
+    uint32_t max_speech_ms = 4000;           // 쉼이 없어도 이 길이에서는 강제로 끊는다.
+    uint32_t forced_cut_lookback_ms = 1500;  // 강제로 끊을 때, 이 범위 안에서 말소리가 가장 약한 지점을 고른다.
 };
 
 // 16kHz 모노 오디오 스트림에서 Silero VAD로 발화 구간을 잘라낸다.

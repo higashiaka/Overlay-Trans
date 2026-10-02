@@ -32,12 +32,14 @@ struct VadSegmenter::Impl {
     std::vector<float> pending;   // 아직 창 크기를 채우지 못한 샘플
     std::vector<float> pre_roll;  // 발화 시작 전 구간 (speech_pad_ms 분량)
     std::vector<float> segment;   // 진행 중인 발화
+    std::vector<float> speech_probabilities;  // segment에서 pre_roll 뒤에 이어진 창들의 음성 확률
     size_t lead_samples = 0;      // segment 앞에 붙인 pre_roll 길이
     size_t silence_samples = 0;   // 발화 끝에 이어진 무음 길이
     bool in_speech = false;
 
     void on_window(const float* window, float probability);
     void end_segment();
+    void cut_long_segment();
 };
 
 void VadSegmenter::Impl::on_window(const float* window, float probability) {
@@ -59,6 +61,7 @@ void VadSegmenter::Impl::on_window(const float* window, float probability) {
     }
 
     segment.insert(segment.end(), window, window + WINDOW_SAMPLES);
+    speech_probabilities.push_back(probability);
 
     if (probability < config.threshold - SILENCE_THRESHOLD_MARGIN) {
         silence_samples += WINDOW_SAMPLES;
@@ -66,10 +69,35 @@ void VadSegmenter::Impl::on_window(const float* window, float probability) {
         silence_samples = 0;
     }
 
-    if (silence_samples >= ms_to_samples(config.min_silence_ms) ||
-        segment.size() >= ms_to_samples(config.max_speech_ms)) {
+    // 발화가 길어질수록 더 짧은 쉼에서도 끊는다.
+    const size_t speech_length = segment.size() - lead_samples;
+    const bool is_long = speech_length >= ms_to_samples(config.long_speech_ms);
+    const uint32_t required_silence_ms = is_long ? config.long_speech_silence_ms : config.min_silence_ms;
+
+    if (silence_samples >= ms_to_samples(required_silence_ms)) {
         end_segment();
+    } else if (speech_length >= ms_to_samples(config.max_speech_ms)) {
+        cut_long_segment();
     }
+}
+
+// 쉼 없이 이어지는 말을 강제로 끊는다. 단어 중간이 잘리는 것을 줄이기 위해,
+// 최근 구간에서 말소리가 가장 약한 지점을 골라 그 앞까지만 내보내고 나머지는 다음 발화로 넘긴다.
+void VadSegmenter::Impl::cut_long_segment() {
+    const size_t window_count = speech_probabilities.size();
+    const size_t lookback = std::min(window_count - 1, ms_to_samples(config.forced_cut_lookback_ms) / WINDOW_SAMPLES);
+    const auto weakest = std::min_element(speech_probabilities.end() - static_cast<std::ptrdiff_t>(lookback),
+                                          speech_probabilities.end());
+    const auto cut_window = static_cast<size_t>(weakest - speech_probabilities.begin()) + 1;
+    const size_t cut_samples = lead_samples + cut_window * WINDOW_SAMPLES;
+
+    on_segment(std::span<const float>(segment.data(), cut_samples));
+
+    segment.erase(segment.begin(), segment.begin() + static_cast<std::ptrdiff_t>(cut_samples));
+    speech_probabilities.erase(speech_probabilities.begin(),
+                               speech_probabilities.begin() + static_cast<std::ptrdiff_t>(cut_window));
+    lead_samples = 0;
+    silence_samples = 0;
 }
 
 void VadSegmenter::Impl::end_segment() {
@@ -84,6 +112,7 @@ void VadSegmenter::Impl::end_segment() {
     }
 
     segment.clear();
+    speech_probabilities.clear();
     silence_samples = 0;
     in_speech = false;
     whisper_vad_reset_state(context);
