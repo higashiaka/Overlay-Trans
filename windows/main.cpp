@@ -18,13 +18,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -41,6 +45,7 @@ struct Options {
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
+    bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
@@ -72,6 +77,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.glossary = value;
         } else if (name == L"--language") {
             options.language = to_utf8(value);
+        } else if (name == L"--chat-context") {
+            options.chat_context = value == L"on";
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -107,6 +114,35 @@ bool read_text_file(const std::filesystem::path& path, std::string& text) {
     text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return true;
 }
+
+// 번역 지시문에 넣을 방송 설명을 만든다.
+std::string build_stream_info(const StreamContext& context) {
+    std::string info;
+    if (!context.channel.empty()) {
+        info += "Channel: " + context.channel + ". ";
+    }
+    if (!context.category.empty()) {
+        info += "Game or category: " + context.category + ". ";
+    }
+    if (!context.title.empty()) {
+        info += "Title: " + context.title + ".";
+    }
+    return info;
+}
+
+// 확장 프로그램에서 받은 채팅 한 줄("이름: 내용")과 받은 시각.
+struct ReceivedChat {
+    Clock::time_point received_at;
+    std::string line;
+};
+
+constexpr size_t MAX_PENDING_CHAT = 30;
+// 발화 하나에 맥락으로 붙이는 채팅 수. 많이 넣을수록 번역이 느려진다.
+constexpr size_t MAX_CHAT_LINES = 3;
+// 채팅 한 줄에서 맥락으로 쓰는 최대 길이(바이트). 긴 채팅은 앞부분만 쓴다.
+constexpr size_t MAX_CHAT_LINE_BYTES = 120;
+// 이보다 오래된 채팅은 지금 하는 말과 관련이 없다고 본다.
+constexpr auto MAX_CHAT_AGE = std::chrono::seconds(30);
 
 double to_seconds(Clock::duration duration) {
     return std::chrono::duration<double>(duration).count();
@@ -250,8 +286,50 @@ int wmain(int argc, wchar_t** argv) {
 
     // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
     const std::string token = load_or_create_pairing_token(pairing_token_path());
+
+    // 확장 프로그램이 보낸 방송 정보는 서버 스레드에서 도착한다. 여기에 보관해 두었다가
+    // 인식과 번역을 하는 스레드가 다음 발화를 처리하기 전에 적용한다.
+    std::mutex context_mutex;
+    std::optional<StreamContext> pending_context;
+    std::deque<ReceivedChat> pending_chat;  // 아직 번역 맥락으로 쓰지 않은 채팅
+    std::string applied_stream_info;        // 번역 지시문에 마지막으로 넣은 방송 설명
+
     SubtitleServer server;
-    if (token.empty() || !server.start({.port = options.port, .token = token})) {
+    const ServerConfig server_config{
+        .port = options.port,
+        .token = token,
+        .on_context =
+            [&](StreamContext context) {
+                std::lock_guard lock(context_mutex);
+                pending_context = std::move(context);
+            },
+        .on_chat =
+            [&](std::vector<ChatMessage> messages) {
+                // 채팅을 번역 맥락으로 쓰는 기능은 기본으로 꺼져 있다. 꺼져 있으면 받은 채팅을 버린다.
+                if (!options.chat_context) {
+                    return;
+                }
+                std::lock_guard lock(context_mutex);
+                for (ChatMessage& message : messages) {
+                    std::string line = message.name + ": " + message.text;
+                    if (line.size() > MAX_CHAT_LINE_BYTES) {
+                        line.resize(MAX_CHAT_LINE_BYTES);
+                        // UTF-8 글자 중간에서 잘렸으면 그 글자를 통째로 버린다.
+                        while (!line.empty() && (static_cast<unsigned char>(line.back()) & 0xC0) == 0x80) {
+                            line.pop_back();
+                        }
+                        if (!line.empty() && (static_cast<unsigned char>(line.back()) & 0xC0) == 0xC0) {
+                            line.pop_back();
+                        }
+                    }
+                    pending_chat.push_back({Clock::now(), std::move(line)});
+                }
+                while (pending_chat.size() > MAX_PENDING_CHAT) {
+                    pending_chat.pop_front();
+                }
+            },
+    };
+    if (token.empty() || !server.start(server_config)) {
         std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);
         return 1;
     }
@@ -263,16 +341,47 @@ int wmain(int argc, wchar_t** argv) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
         };
 
+        std::optional<StreamContext> context;
+        {
+            std::lock_guard lock(context_mutex);
+            context.swap(pending_context);
+        }
+        if (context) {
+            // 방송 화면이 아닌 페이지(목록, 검색 등)에서는 빈 정보가 온다. 그때는 직전 정보를 그대로 둔다.
+            const std::string stream_info = build_stream_info(*context);
+            if (!stream_info.empty() && stream_info != applied_stream_info) {
+                translator.set_stream_info(stream_info);
+                applied_stream_info = stream_info;
+                std::printf("Stream context: %s\n", stream_info.c_str());
+            }
+        }
+
         const auto stt_started_at = Clock::now();
         const std::string text = recognizer.transcribe(samples);
         const auto translation_started_at = Clock::now();
-        const std::string translation = text.empty() ? std::string() : translator.translate(text);
+
+        // 이 발화 직전까지 올라온 채팅을 번역의 맥락으로 쓴다. 오래된 채팅은 버리고, 한 번 쓴 채팅은 다시 쓰지 않는다.
+        std::vector<std::string> chat;
+        {
+            std::lock_guard lock(context_mutex);
+            for (const ReceivedChat& received : pending_chat) {
+                if (translation_started_at - received.received_at <= MAX_CHAT_AGE) {
+                    chat.push_back(received.line);
+                }
+            }
+            pending_chat.clear();
+        }
+        if (chat.size() > MAX_CHAT_LINES) {
+            chat.erase(chat.begin(), chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
+        }
+
+        const std::string translation = text.empty() ? std::string() : translator.translate(text, chat);
         const auto finished_at = Clock::now();
 
-        std::printf("[%.2f s audio | STT %lld ms | translation %lld ms]\n  %s\n  %s\n",
+        std::printf("[%.2f s audio | STT %lld ms | translation %lld ms | chat %zu]\n  %s\n  %s\n",
                     static_cast<double>(samples.size()) / static_cast<double>(config.sample_rate * config.channels),
                     to_ms(translation_started_at - stt_started_at), to_ms(finished_at - translation_started_at),
-                    text.c_str(), translation.c_str());
+                    chat.size(), text.c_str(), translation.c_str());
         std::fflush(stdout);
 
         if (!translation.empty()) {

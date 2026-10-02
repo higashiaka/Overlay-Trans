@@ -1,11 +1,13 @@
 #include "translator.h"
 
 #include "text/katakana.h"
+#include "text/script.h"
 
 #include <llama.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -16,6 +18,16 @@ namespace {
 
 constexpr unsigned int MAX_THREADS = 8;
 constexpr int PIECE_BUFFER_SIZE = 256;
+
+struct Example {
+    const char* source;
+    const char* translation;
+};
+
+constexpr Example KOREAN_EXAMPLES[] = {
+    {"え、なんで？どうしたの？", "어, 왜? 무슨 일이야?"},
+    {"今日はちょっと早めに終わるかも", "오늘은 좀 일찍 끝날지도 몰라."},
+};
 
 int default_thread_count() {
     return static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_THREADS));
@@ -28,12 +40,16 @@ void log_warnings_only(ggml_log_level level, const char* text, void*) {
     }
 }
 
-std::string build_system_prompt(const TranslatorConfig& config) {
+std::string build_system_prompt(const TranslatorConfig& config, const std::string& stream_info) {
     std::string prompt = "You are a subtitle translator for a live stream. ";
     prompt += "Each user message is one line of speech-recognition text. ";
     prompt += "Reply with only its natural, colloquial " + config.target_language + " translation. ";
     prompt += "Stay faithful to the original: do not add, explain, or answer anything. ";
     prompt += "Earlier lines are context for understanding the current one. ";
+    // 채팅 맥락이 붙은 경우의 형식. translate()에서 만드는 형식과 맞아야 한다.
+    prompt += "A message may begin with a [Chat] section listing recent viewer chat messages that the streamer ";
+    prompt += "may be reacting to. It is context only: never translate or answer it. ";
+    prompt += "Translate only the text after [Streamer]. ";
     // 방송 용어는 외래어가 많아서, 뜻을 추측해 옮기면 틀리기 쉽다. 애매하면 소리 나는 대로 적게 한다.
     prompt += "Katakana words are usually loanwords, game terms, or names: unless you are sure of the meaning, ";
     prompt += "transliterate them by sound instead of guessing a translation. ";
@@ -44,6 +60,9 @@ std::string build_system_prompt(const TranslatorConfig& config) {
         prompt += " Write the reply in Hangul only: no Chinese characters and no Japanese kana.";
     }
 
+    if (!stream_info.empty()) {
+        prompt += "\n\nAbout this stream: " + stream_info;
+    }
     if (!config.glossary.empty()) {
         prompt += "\n\nGlossary (always use these translations):\n" + config.glossary;
     }
@@ -63,7 +82,8 @@ std::string trim(const std::string& text) {
 
 struct Translator::Impl {
     struct Line {
-        std::string source;
+        std::string source;       // 번역한 문장
+        std::string message;      // 모델에 실제로 넣은 내용 (채팅 맥락이 붙어 있을 수 있다)
         std::string translation;
     };
 
@@ -77,24 +97,33 @@ struct Translator::Impl {
     std::vector<Line> history;         // 모델의 메모리에 들어 있는 이전 문장들
     size_t formatted_history_size = 0;  // history까지를 대화 형식으로 만든 문자열의 길이
 
-    // history 뒤에 current_source를 붙인 대화를 모델의 형식으로 만든다.
+    // history 뒤에 current_message를 붙인 대화를 모델의 형식으로 만든다.
     // add_reply_start가 true면 모델이 답을 시작할 위치까지 포함한다.
-    std::string format_chat(const std::string* current_source, bool add_reply_start) const;
+    std::string format_chat(const std::string* current_message, bool add_reply_start) const;
     std::vector<llama_token> tokenize(const std::string& text, bool is_first) const;
     bool fits_in_context(size_t new_token_count) const;
     void forget_old_lines();
     std::string generate();
+    std::string run(const std::string& message);
 };
 
-std::string Translator::Impl::format_chat(const std::string* current_source, bool add_reply_start) const {
+std::string Translator::Impl::format_chat(const std::string* current_message, bool add_reply_start) const {
     std::vector<llama_chat_message> messages;
     messages.push_back({"system", system_prompt.c_str()});
+    // 첫 문장부터 "받은 말을 번역만 한다"는 형식이 잡혀 있도록 예시를 먼저 보여 준다.
+    // 예시가 없으면 질문 형태의 첫 문장에 번역 대신 대답을 하는 경우가 있었다.
+    if (config.target_language == "Korean") {
+        for (const Example& example : KOREAN_EXAMPLES) {
+            messages.push_back({"user", example.source});
+            messages.push_back({"assistant", example.translation});
+        }
+    }
     for (const Line& line : history) {
-        messages.push_back({"user", line.source.c_str()});
+        messages.push_back({"user", line.message.c_str()});
         messages.push_back({"assistant", line.translation.c_str()});
     }
-    if (current_source != nullptr) {
-        messages.push_back({"user", current_source->c_str()});
+    if (current_message != nullptr) {
+        messages.push_back({"user", current_message->c_str()});
     }
 
     const char* chat_template = llama_model_chat_template(model, nullptr);
@@ -132,6 +161,10 @@ bool Translator::Impl::fits_in_context(size_t new_token_count) const {
 void Translator::Impl::forget_old_lines() {
     if (history.size() > config.context_lines) {
         history.erase(history.begin(), history.end() - static_cast<std::ptrdiff_t>(config.context_lines));
+    }
+    // 다시 넣을 때는 지난 채팅을 빼고 문장만 남겨 메모리를 아낀다.
+    for (Line& line : history) {
+        line.message = line.source;
     }
     llama_memory_clear(llama_get_memory(context), true);
     formatted_history_size = 0;
@@ -198,47 +231,99 @@ bool Translator::init(const std::filesystem::path& model_path, const TranslatorC
         return false;
     }
 
-    // 같은 입력에 항상 같은 번역이 나오도록 가장 확률이 높은 토큰만 고른다.
     impl_->sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+
+    // 한국어로 번역할 때는 일본어·중국어 글자가 든 토큰을 아예 고르지 못하게 막는다.
+    // 지시문으로 부탁하는 것만으로는 원문의 가나와 한자를 그대로 옮겨 적는 일을 막지 못했다.
+    if (config.target_language == "Korean") {
+        const int32_t token_count = llama_vocab_n_tokens(impl_->vocab);
+        std::vector<llama_logit_bias> blocked;
+        for (llama_token token = 0; token < token_count; ++token) {
+            char piece[PIECE_BUFFER_SIZE];
+            const int32_t length = llama_token_to_piece(impl_->vocab, token, piece, sizeof(piece), 0, true);
+            if (length > 0 && contains_kana_or_han(std::string_view(piece, static_cast<size_t>(length)))) {
+                blocked.push_back({token, -std::numeric_limits<float>::infinity()});
+            }
+        }
+        llama_sampler_chain_add(impl_->sampler, llama_sampler_init_logit_bias(token_count,
+                                                                              static_cast<int32_t>(blocked.size()),
+                                                                              blocked.data()));
+    }
+
+    // 같은 입력에 항상 같은 번역이 나오도록 가장 확률이 높은 토큰만 고른다.
     llama_sampler_chain_add(impl_->sampler, llama_sampler_init_greedy());
 
     impl_->config = config;
-    impl_->system_prompt = build_system_prompt(config);
+    impl_->system_prompt = build_system_prompt(config, {});
     return true;
 }
 
-std::string Translator::translate(std::string_view text) {
+void Translator::set_stream_info(const std::string& info) {
+    const std::string system_prompt = build_system_prompt(impl_->config, info);
+    if (system_prompt == impl_->system_prompt) {
+        return;
+    }
+    // 지시문이 바뀌면 모델의 메모리를 처음부터 다시 채워야 한다. 최근 문장들은 맥락으로 남긴다.
+    impl_->system_prompt = system_prompt;
+    impl_->forget_old_lines();
+}
+
+std::string Translator::translate(std::string_view text, std::span<const std::string> chat) {
     const std::string source(text);
 
+    // 채팅이 있으면 번역할 문장 앞에 붙인다. 지시문에서 이 형식을 설명해 두었다.
+    std::string message = source;
+    if (!chat.empty()) {
+        message = "[Chat]\n";
+        for (const std::string& line : chat) {
+            message += line + "\n";
+        }
+        message += "[Streamer]\n" + source;
+    }
+
+    std::string translation = impl_->run(message);
+
+    // 다른 문장인데 직전과 똑같은 번역이 나왔다면, 모델이 앞의 답을 그대로 따라 하고 있는 것이다.
+    // 한번 이렇게 되면 계속 같은 말만 내놓으므로, 이전 문장들을 버리고 이 문장만 다시 번역한다.
+    if (!impl_->history.empty() && !translation.empty() && translation == impl_->history.back().translation &&
+        source != impl_->history.back().source) {
+        impl_->history.clear();
+        impl_->forget_old_lines();
+        translation = impl_->run(message);
+    }
+
+    impl_->history.push_back({source, message, translation});
+    impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
+    return translation;
+}
+
+// 모델의 메모리에 message를 이어 넣고 번역을 생성한다.
+std::string Translator::Impl::run(const std::string& message) {
     // 이전 문장들은 이미 모델의 메모리에 있으므로, 새로 늘어난 부분만 이어서 넣는다.
-    std::string formatted = impl_->format_chat(&source, true);
-    std::vector<llama_token> tokens =
-        impl_->tokenize(formatted.substr(impl_->formatted_history_size), impl_->formatted_history_size == 0);
+    std::string formatted = format_chat(&message, true);
+    std::vector<llama_token> tokens = tokenize(formatted.substr(formatted_history_size), formatted_history_size == 0);
 
     // 메모리가 차면 오래된 문장을 버리고 최근 문장들만으로 다시 시작한다.
-    if (!impl_->fits_in_context(tokens.size())) {
-        impl_->forget_old_lines();
-        formatted = impl_->format_chat(&source, true);
-        tokens = impl_->tokenize(formatted, true);
+    if (!fits_in_context(tokens.size())) {
+        forget_old_lines();
+        formatted = format_chat(&message, true);
+        tokens = tokenize(formatted, true);
     }
     if (tokens.empty()) {
         return {};
     }
 
-    if (llama_decode(impl_->context, llama_batch_get_one(tokens.data(), static_cast<int32_t>(tokens.size()))) != 0) {
-        impl_->history.clear();
-        impl_->forget_old_lines();
+    if (llama_decode(context, llama_batch_get_one(tokens.data(), static_cast<int32_t>(tokens.size()))) != 0) {
+        history.clear();
+        forget_old_lines();
         return {};
     }
 
-    std::string translation = impl_->generate();
+    std::string translation = generate();
     // 모델이 옮기지 않고 남긴 가타카나는 소리 나는 대로 한글로 바꾼다.
-    if (impl_->config.target_language == "Korean") {
+    if (config.target_language == "Korean") {
         translation = katakana_to_hangul(translation);
     }
-
-    impl_->history.push_back({source, translation});
-    impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
     return translation;
 }
 
