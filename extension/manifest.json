@@ -18,6 +18,12 @@
       "js": ["content/sites/twitch.js", "content/overlay.js", "content/main.js"],
       "css": ["content/overlay.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content/sites/youtube.js", "content/overlay.js", "content/main.js"],
+      "css": ["content/overlay.css"],
+      "run_at": "document_idle"
     }
   ]
 }
