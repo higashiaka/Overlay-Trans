@@ -216,6 +216,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossa
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input sample/recording.mp4
 
+# 말이 잠깐 멈추면 발화가 끝났다고 확정되기 전에 인식을 미리 시작해 자막을 앞당김 (기본으로 켜짐). 끄려면 off
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-stt off
+
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```

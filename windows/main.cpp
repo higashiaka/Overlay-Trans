@@ -3,6 +3,7 @@
 #include "audio/wav_writer.h"
 #include "capture/audio_file_reader.h"
 #include "capture/loopback_capture.h"
+#include "inference/recognition_worker.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
 #include "server/pairing_token.h"
@@ -46,6 +47,7 @@ struct Options {
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
+    bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
@@ -79,6 +81,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
+        } else if (name == L"--early-stt") {
+            options.early_stt = value != L"off";
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -149,7 +153,7 @@ double to_seconds(Clock::duration duration) {
 }
 
 // 파일을 처음부터 끝까지 가능한 한 빠르게 처리한다.
-int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& vad) {
+int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& vad, RecognitionWorker& worker) {
     AudioFileReader reader;
     if (!reader.open(options.input_file, config.sample_rate, config.channels)) {
         std::fprintf(stderr, "Failed to open audio file: %s (%s)\n", to_utf8(options.input_file).c_str(),
@@ -171,6 +175,7 @@ int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& 
         vad.process(chunk.data(), frame_count * config.channels);
     }
     vad.flush();
+    worker.wait_until_idle();
 
     std::printf("Processed %.1f s of audio in %.1f s.\n",
                 static_cast<double>(total_frames) / static_cast<double>(config.sample_rate),
@@ -179,7 +184,8 @@ int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& 
 }
 
 // 시스템 오디오를 캡처해 Enter를 누를 때까지 처리한다.
-int run_live(const Options& options, const CaptureConfig& config, const VadConfig& vad_config, VadSegmenter& vad) {
+int run_live(const Options& options, const CaptureConfig& config, const VadConfig& vad_config, VadSegmenter& vad,
+             RecognitionWorker& worker) {
     const size_t samples_per_second = static_cast<size_t>(config.sample_rate) * config.channels;
 
     WavWriter wav_dump;
@@ -241,6 +247,7 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
     capture.stop();
     consumer.request_stop();
     consumer.join();
+    worker.wait_until_idle();
     wav_dump.close();
 
     std::printf("Dropped %llu samples.\n", static_cast<unsigned long long>(ring.dropped_samples()));
@@ -256,7 +263,10 @@ int wmain(int argc, wchar_t** argv) {
 
     const Options options = parse_options(argc, argv);
     const CaptureConfig config;
-    const VadConfig vad_config;
+    VadConfig vad_config;
+    if (!options.early_stt) {
+        vad_config.early_silence_ms = 0;
+    }
 
     SpeechRecognizer recognizer;
     const SttConfig stt_config{
@@ -288,7 +298,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::string token = load_or_create_pairing_token(pairing_token_path());
 
     // 확장 프로그램이 보낸 방송 정보는 서버 스레드에서 도착한다. 여기에 보관해 두었다가
-    // 인식과 번역을 하는 스레드가 다음 발화를 처리하기 전에 적용한다.
+    // 번역을 하는 스레드가 다음 발화를 처리하기 전에 적용한다.
     std::mutex context_mutex;
     std::optional<StreamContext> pending_context;
     std::deque<ReceivedChat> pending_chat;  // 아직 번역 맥락으로 쓰지 않은 채팅
@@ -335,8 +345,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::printf("Pairing code: %d-%s\n", options.port, token.c_str());
 
-    VadSegmenter vad;
-    const bool vad_ready = vad.init(options.vad_model, vad_config, [&](std::span<const float> samples) {
+    // 인식과 번역은 오디오를 받는 스레드와 따로 돌린다. 인식하는 동안에도 발화 구간을 계속 찾아야
+    // 다음 발화의 인식을 제때 미리 시작할 수 있다.
+    const bool is_live = options.input_file.empty();
+    RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
         const auto to_ms = [](Clock::duration duration) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
         };
@@ -356,8 +368,7 @@ int wmain(int argc, wchar_t** argv) {
             }
         }
 
-        const auto stt_started_at = Clock::now();
-        const std::string text = recognizer.transcribe(samples);
+        const std::string& text = speech.text;
         const auto translation_started_at = Clock::now();
 
         // 이 발화 직전까지 올라온 채팅을 번역의 맥락으로 쓴다. 오래된 채팅은 버리고, 한 번 쓴 채팅은 다시 쓰지 않는다.
@@ -378,23 +389,37 @@ int wmain(int argc, wchar_t** argv) {
         const std::string translation = text.empty() ? std::string() : translator.translate(text, chat);
         const auto finished_at = Clock::now();
 
-        std::printf("[%.2f s audio | STT %lld ms | translation %lld ms | chat %zu]\n  %s\n  %s\n",
-                    static_cast<double>(samples.size()) / static_cast<double>(config.sample_rate * config.channels),
-                    to_ms(translation_started_at - stt_started_at), to_ms(finished_at - translation_started_at),
-                    chat.size(), text.c_str(), translation.c_str());
+        std::printf("[%.2f s audio | STT %lld ms%s | translation %lld ms | chat %zu",
+                    static_cast<double>(speech.samples.size()) /
+                        static_cast<double>(config.sample_rate * config.channels),
+                    to_ms(speech.recognition_time), speech.started_early ? " (early)" : "",
+                    to_ms(finished_at - translation_started_at), chat.size());
+        // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
+        if (is_live) {
+            std::printf(" | delay %lld ms", to_ms(finished_at - speech.speech_ended_at));
+        }
+        std::printf("]\n  %s\n  %s\n", text.c_str(), translation.c_str());
         std::fflush(stdout);
 
         if (!translation.empty()) {
             server.publish({text, translation});
         }
     });
+
+    VadSegmenter vad;
+    const VadCallbacks vad_callbacks{
+        .on_segment = [&](std::span<const float> samples, uint32_t waited_ms) { worker.submit(samples, waited_ms); },
+        .on_pause = [&](std::span<const float> samples) { worker.begin_early(samples); },
+        .on_resume = [&] { worker.cancel_early(); },
+    };
+    const bool vad_ready = vad.init(options.vad_model, vad_config, vad_callbacks);
     if (!vad_ready) {
         std::fprintf(stderr, "Failed to load VAD model: %s\n", to_utf8(options.vad_model).c_str());
         return 1;
     }
 
-    if (!options.input_file.empty()) {
-        return run_file(options, config, vad);
+    if (!is_live) {
+        return run_file(options, config, vad, worker);
     }
-    return run_live(options, config, vad_config, vad);
+    return run_live(options, config, vad_config, vad, worker);
 }
