@@ -1,0 +1,84 @@
+body {
+  width: 300px;
+  margin: 0;
+  padding: 14px;
+  font: 13px/1.5 system-ui, "Malgun Gothic", sans-serif;
+  color: #1f1f1f;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+label {
+  display: block;
+  margin-top: 10px;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid #b5b5b5;
+  border-radius: 4px;
+  font: inherit;
+  font-family: Consolas, monospace;
+}
+
+button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: #6441a5;
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #f0f0f0;
+}
+
+.status.ok {
+  background: #e3f4e6;
+  color: #17602a;
+}
+
+.status.bad {
+  background: #fde8e8;
+  color: #8f1d1d;
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: #666666;
+  font-size: 12px;
+}
+
+.result {
+  min-height: 1.5em;
+  margin: 6px 0 0;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
