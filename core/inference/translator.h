@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -29,6 +30,9 @@ public:
     Translator();
     ~Translator();
 
+    // 만들어지는 중인 번역문을 받는다. 번역문의 앞부분(UTF-8)이 넘어오며, translate를 호출한 스레드에서 호출된다.
+    using PartialCallback = std::function<void(std::string_view partial)>;
+
     Translator(const Translator&) = delete;
     Translator& operator=(const Translator&) = delete;
 
@@ -42,8 +46,9 @@ public:
     // chat에는 이 발화 직전에 올라온 채팅을 "이름: 내용" 형식으로 넘긴다. 번역의 맥락으로만 쓰인다.
     // replace_previous가 true면 직전에 번역한 문장을 맥락에서 빼고 이 문장으로 바꾼다.
     // 직전 문장에 말이 이어져서, 둘을 합친 문장을 다시 번역할 때 쓴다.
+    // on_partial을 넘기면 번역문이 만들어지는 동안 그때까지 만들어진 부분을 여러 번 알려 준다.
     std::string translate(std::string_view text, std::span<const std::string> chat = {},
-                          bool replace_previous = false);
+                          bool replace_previous = false, const PartialCallback& on_partial = {});
 
 private:
     struct Impl;

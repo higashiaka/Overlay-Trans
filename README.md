@@ -235,6 +235,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-
 # 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
 
+# 번역문이 다 만들어지기 전에, 만들어진 부분부터 자막으로 보냄 (기본으로 켜짐). 끄려면 off
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stream-subtitles off
+
 # STT가 한 번에 계산하는 길이 (한 칸에 20ms). 기본은 768칸으로, 모델 전체(1500칸=30초)를 계산할 때보다
 # 인식 시간이 1/3 정도로 줄지만 인식 결과가 일부 달라짐. 발화가 더 길면 그 발화만 자동으로 늘림. 0이면 모델 전체를 계산
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-audio-ctx 0

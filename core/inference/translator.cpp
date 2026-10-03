@@ -6,6 +6,7 @@
 #include <llama.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <thread>
@@ -18,6 +19,8 @@ namespace {
 
 constexpr unsigned int MAX_THREADS = 8;
 constexpr int PIECE_BUFFER_SIZE = 256;
+// 만들어지는 중인 번역문을 알리는 최소 간격. 토큰마다 알리면 자막이 지나치게 자주 바뀐다.
+constexpr auto PARTIAL_INTERVAL = std::chrono::milliseconds(120);
 
 struct Example {
     const char* source;
@@ -78,6 +81,22 @@ std::string trim(const std::string& text) {
     return text.substr(first, last - first + 1);
 }
 
+// 끝이 UTF-8 글자 중간에서 잘려 있으면 온전한 글자까지의 길이를 반환한다.
+size_t complete_utf8_length(std::string_view text) {
+    size_t length = text.size();
+    size_t continuation = 0;
+    while (length > 0 && (static_cast<unsigned char>(text[length - 1]) & 0xC0) == 0x80) {
+        --length;
+        ++continuation;
+    }
+    if (length == 0) {
+        return 0;
+    }
+    const auto lead = static_cast<unsigned char>(text[length - 1]);
+    const size_t expected = lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2 : lead >= 0xC0 ? 1 : 0;
+    return continuation >= expected ? text.size() : length - 1;
+}
+
 }  // namespace
 
 struct Translator::Impl {
@@ -98,6 +117,8 @@ struct Translator::Impl {
     llama_sampler* hangul_only_sampler = nullptr;
     // 지금 번역하는 문장에 쓸 샘플러. translate에서 문장마다 고른다.
     llama_sampler* active_sampler = nullptr;
+    // 지금 번역하는 문장의 중간 결과를 받을 콜백. 없으면 nullptr.
+    const PartialCallback* on_partial = nullptr;
     const llama_vocab* vocab = nullptr;
     TranslatorConfig config;
 
@@ -195,6 +216,8 @@ void Translator::Impl::remove_last_line() {
 
 std::string Translator::Impl::generate() {
     std::string text;
+    // 첫 낱말은 기다리지 않고 바로 알린다. 그다음부터 PARTIAL_INTERVAL 간격으로 알린다.
+    std::chrono::steady_clock::time_point last_partial_at;
     for (int i = 0; i < config.max_output_tokens; ++i) {
         llama_token token = llama_sampler_sample(active_sampler, context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
@@ -205,6 +228,15 @@ std::string Translator::Impl::generate() {
         const int32_t length = llama_token_to_piece(vocab, token, piece, sizeof(piece), 0, false);
         if (length > 0) {
             text.append(piece, static_cast<size_t>(length));
+        }
+
+        if (on_partial != nullptr && *on_partial &&
+            std::chrono::steady_clock::now() - last_partial_at >= PARTIAL_INTERVAL) {
+            const std::string partial = trim(text.substr(0, complete_utf8_length(text)));
+            if (!partial.empty()) {
+                (*on_partial)(partial);
+                last_partial_at = std::chrono::steady_clock::now();
+            }
         }
 
         if (llama_decode(context, llama_batch_get_one(&token, 1)) != 0) {
@@ -316,7 +348,8 @@ void Translator::set_stream_info(const std::string& info) {
     impl_->forget_old_lines();
 }
 
-std::string Translator::translate(std::string_view text, std::span<const std::string> chat, bool replace_previous) {
+std::string Translator::translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
+                                  const PartialCallback& on_partial) {
     const std::string source(text);
 
     // 채팅이 있으면 번역할 문장 앞에 붙인다. 지시문에서 이 형식을 설명해 두었다.
@@ -339,6 +372,8 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
     impl_->active_sampler =
         impl_->hangul_only_sampler != nullptr && !needs_latin ? impl_->hangul_only_sampler : impl_->sampler;
 
+    impl_->on_partial = &on_partial;
+
     llama_pos memory_start = -1;
     size_t formatted_start = 0;
     std::string translation = impl_->run(message, memory_start, formatted_start);
@@ -351,6 +386,8 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
         impl_->forget_old_lines();
         translation = impl_->run(message, memory_start, formatted_start);
     }
+
+    impl_->on_partial = nullptr;
 
     impl_->history.push_back({source, message, translation, memory_start, formatted_start});
     impl_->formatted_history_size = impl_->format_chat(nullptr, false).size();
