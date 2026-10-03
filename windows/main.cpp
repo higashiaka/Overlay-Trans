@@ -8,6 +8,7 @@
 #include "inference/translator.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
+#include "text/script.h"
 #include "tray/tray_icon.h"
 
 #define NOMINMAX
@@ -471,6 +472,18 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         const std::string& text = speech.text;
+
+        // 감탄사나 웃음소리만 있는 구간은 번역하지 않는다. 앞 문장에 합쳐 다시 번역하면 맞던 번역이 바뀌는 일이 있었다.
+        // (体力上がるやすごー + ん -> "체력이 오르길 막막해") 합치고 있던 문장은 그대로 두어, 다음 구간이 이어서 합쳐질 수 있다.
+        if (is_japanese_interjection(text)) {
+            std::printf("[%.2f s audio | STT %lld ms%s | skipped]\n  %s\n",
+                        static_cast<double>(speech.samples.size()) /
+                            static_cast<double>(config.sample_rate * config.channels),
+                        to_ms(speech.recognition_time), speech.started_early ? " (early)" : "", text.c_str());
+            std::fflush(stdout);
+            return;
+        }
+
         const auto translation_started_at = Clock::now();
 
         // 이 발화 직전까지 올라온 채팅을 번역의 맥락으로 쓴다. 오래된 채팅은 버리고, 한 번 쓴 채팅은 다시 쓰지 않는다.
