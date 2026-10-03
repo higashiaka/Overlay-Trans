@@ -33,7 +33,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | VAD | Silero VAD | whisper.cpp 내장 VAD 사용 (발화 구간 검출) |
 | STT Engine | whisper.cpp | 온디바이스 음성 인식 |
 | LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 |
-| Speaker Diarization | sherpa-onnx (예정) | 발화 구간별 화자 임베딩으로 화자 구분 |
+| 목소리 비교 | sherpa-onnx | 앞뒤 발화의 목소리 특징(3D-Speaker CAM++)을 비교해 다른 사람의 말은 합치지 않음. 빌드할 때 공식 배포 바이너리를 내려받음 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
 | 자막 표시 | 브라우저 확장 프로그램 (Manifest V3) | 앱의 로컬 서버에서 자막을 받아 방송 영상 위에 표시 (트위치, 유튜브) |
@@ -84,11 +84,11 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
   - 앱의 로컬 서버(페어링 키 인증)에서 자막을 받아 표시하고, 방송 정보와 채팅을 앱으로 전달
   - 말이 이어지면 앞의 자막과 합쳐 다시 번역하고 화면의 자막을 교체
   - E2E 통합 테스트: 캡처 → VAD → STT → LLM → 오버레이 전체 파이프라인 지연 시간(목표: 발화가 끝난 뒤 약 1.5초 이내) 측정
-- **Step 6: 화자 분리 (Speaker Diarization)** — 1.0.0에 포함되지 않음
+- **Step 6: 화자 분리 (Speaker Diarization)**
   - sherpa-onnx 연동 및 화자 임베딩 모델 선정
-  - VAD가 검출한 발화 구간마다 화자 임베딩을 추출하고, 기존 화자와 비교해 화자 번호 부여
-  - 화자 정보를 번역 프롬프트와 자막 표시에 반영
-  - 검증: 화자 식별 추가에 따른 지연 시간 증가 측정
+  - 화자 번호 매기기(클러스터링)와 pyannote 화자 분할은 여러 사람이 빠르게 주고받는 방송에서 화자 바뀜을 3~35%밖에 찾지 못해 보류
+  - 대신 앞뒤 발화의 맞닿은 부분 목소리를 비교해, 다른 사람의 말은 앞 문장에 합치지 않음
+  - 검증: 화자별 색이 들어간 유튜브 자막(클립 7개)을 정답으로 채점
 
 ## 4. 프로젝트 폴더 구조
 
@@ -208,6 +208,7 @@ $ cd Overlay-Trans
 # 2. VAD / STT / 번역 모델 다운로드 (core/models/는 git에 포함되지 않음. 번역 모델은 약 2.5GB)
 $ curl -L -o core/models/ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
 $ curl -L -o core/models/ggml-large-v3-turbo-q5_0.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+$ curl -L -o core/models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
 $ curl -L -o core/models/gemma-3-4b-it-Q4_K_M.gguf https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf
 
 # 3. Windows x64 빌드 (Visual Studio 2022, CMake 3.21 이상)
@@ -245,6 +246,10 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-au
 
 # 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둠 (설치본은 기본으로 켜짐). 아이콘 메뉴로 다시 볼 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --background on
+
+# 이어진 말을 합칠 때 앞뒤 목소리를 비교해, 다른 사람(게임 음성, 함께 방송하는 사람)의 말은 합치지 않음 (기본으로 켜짐)
+# 로그에 "voice 유사도"와 합치지 않은 경우 "other voice"가 표시됨. 끄려면 off
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --voice-match off
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav

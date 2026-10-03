@@ -1,6 +1,7 @@
 #include "script.h"
 
 #include <cstddef>
+#include <string_view>
 
 namespace overlay_trans {
 
@@ -74,6 +75,29 @@ bool contains_non_korean_script(std::string_view text, bool allow_latin) {
         }
     }
     return false;
+}
+
+bool is_japanese_interjection(std::string_view text) {
+    // 감탄사와 웃음소리에 쓰이는 글자. 뜻이 있는 말에 자주 쓰이는 い, わ 등은 넣지 않는다.
+    constexpr std::u32string_view INTERJECTION_LETTERS =
+        U"んンーっッあアぁえエぇうウぅおオぉはハひヒふフへヘほホ笑wWｗ";
+    constexpr std::u32string_view IGNORED = U" 　、。,.!?！？…~〜～・";
+
+    bool has_letter = false;
+    for (size_t i = 0; i < text.size();) {
+        char32_t code = 0;
+        if (!read_code_point(text, i, code)) {
+            return false;
+        }
+        if (IGNORED.find(code) != std::u32string_view::npos) {
+            continue;
+        }
+        if (INTERJECTION_LETTERS.find(code) == std::u32string_view::npos) {
+            return false;
+        }
+        has_letter = true;
+    }
+    return has_letter;
 }
 
 bool contains_latin_letter(std::string_view text) {

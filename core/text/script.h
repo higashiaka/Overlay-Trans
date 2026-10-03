@@ -12,4 +12,7 @@ bool contains_non_korean_script(std::string_view text, bool allow_latin);
 // UTF-8 문자열에 영문자(A-Z, a-z)가 하나라도 있으면 true.
 bool contains_latin_letter(std::string_view text);
 
+// 일본어 감탄사나 웃음소리(ん, えー, はっはっは, ふふ, 笑 등)로만 이루어져 있으면 true. 빈 문자열은 false.
+bool is_japanese_interjection(std::string_view text);
+
 }  // namespace overlay_trans

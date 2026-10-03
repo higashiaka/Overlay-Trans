@@ -18,6 +18,11 @@ $modelFiles = @(
         Note = "음성 인식 (0.6GB)"
     },
     @{
+        Name = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+        Url  = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+        Note = "화자 구분 (30MB)"
+    },
+    @{
         Name = "gemma-3-4b-it-Q4_K_M.gguf"
         Url  = "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf"
         Note = "번역 (2.5GB)"

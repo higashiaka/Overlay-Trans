@@ -39,3 +39,26 @@ endif()
 if(WIN32)
     target_link_libraries(overlay_httplib PUBLIC ws2_32)
 endif()
+
+# 화자 구분에 쓰는 sherpa-onnx (화자 임베딩 추출). 소스 빌드가 무거워서 공식 배포 바이너리를 받아 쓴다.
+# C API DLL과 ONNX Runtime DLL을 실행 파일 옆에 함께 두어야 한다. (OVERLAY_SHERPA_ONNX_DLLS)
+include(FetchContent)
+set(SHERPA_ONNX_VERSION 1.13.8)
+FetchContent_Declare(sherpa_onnx
+    URL https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/sherpa-onnx-v${SHERPA_ONNX_VERSION}-win-x64-shared-MD-Release-no-tts.tar.bz2
+    URL_HASH SHA256=876e6b89b8cf84a3a1b375a397507f2cfe9c227c2a945411a11a668475fcb5d3
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(sherpa_onnx)
+
+add_library(overlay_sherpa_onnx SHARED IMPORTED GLOBAL)
+set_target_properties(overlay_sherpa_onnx PROPERTIES
+    IMPORTED_LOCATION ${sherpa_onnx_SOURCE_DIR}/lib/sherpa-onnx-c-api.dll
+    IMPORTED_IMPLIB ${sherpa_onnx_SOURCE_DIR}/lib/sherpa-onnx-c-api.lib
+    INTERFACE_INCLUDE_DIRECTORIES ${sherpa_onnx_SOURCE_DIR}/include
+)
+set(OVERLAY_SHERPA_ONNX_DLLS
+    ${sherpa_onnx_SOURCE_DIR}/lib/sherpa-onnx-c-api.dll
+    ${sherpa_onnx_SOURCE_DIR}/lib/onnxruntime.dll
+    ${sherpa_onnx_SOURCE_DIR}/lib/onnxruntime_providers_shared.dll
+    CACHE INTERNAL "")
