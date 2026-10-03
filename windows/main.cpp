@@ -59,7 +59,7 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
-    bool speakers = false;  // 발화마다 화자를 구분해 로그에 표시할지
+    bool speakers = true;  // 발화마다 화자를 구분해, 다른 사람의 말은 앞 문장에 합치지 않을지
     bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
@@ -214,7 +214,12 @@ struct OpenSentence {
     size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
     int64_t subtitle = 0;           // 화면에 내보낸 자막의 번호
     std::string translation;        // 화면에 내보낸 번역문
+    int speaker = SpeakerIdentifier::UNKNOWN;  // 이 문장을 말한 화자. 확실히 구분된 구간이 없으면 UNKNOWN.
 };
+
+// 화자 구분을 믿을 수 있는 최소 구간 길이(초). 이보다 짧은 구간은 같은 사람이어도 다른 화자로 잡히는 일이 잦아서,
+// 다른 화자라도 문장을 나누는 데 쓰지 않는다.
+constexpr double MIN_SPEAKER_SPLIT_SECONDS = 1.5;
 
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
@@ -460,7 +465,7 @@ int wmain(int argc, wchar_t** argv) {
 
     // 인식과 번역은 오디오를 받는 스레드와 따로 돌린다. 인식하는 동안에도 발화 구간을 계속 찾아야
     // 다음 발화의 인식을 제때 미리 시작할 수 있다.
-    // 화자 구분은 아직 로그에만 표시한다. 게임 음성 등 다른 목소리를 얼마나 잘 가르는지 확인하는 단계다.
+    // 게임 음성 등 진행자가 아닌 목소리가 진행자의 말에 합쳐져 함께 다시 번역되지 않게 화자를 구분한다.
     SpeakerIdentifier speaker_identifier;
     if (options.speakers && !speaker_identifier.init(options.speaker_model, {})) {
         std::fprintf(stderr, "Failed to load speaker model: %s\n", to_utf8(options.speaker_model).c_str());
@@ -500,9 +505,10 @@ int wmain(int argc, wchar_t** argv) {
 
         // 로그에 붙일 화자 표시. "speaker 1 (0.72)"처럼 화자 번호와 그 화자와의 유사도를 적고, 진행자로 보이는 화자에는 *를 붙인다.
         std::string speaker_label;
+        int speaker = SpeakerIdentifier::UNKNOWN;
         if (options.speakers) {
             float similarity = 0.0f;
-            const int speaker = speaker_identifier.identify(speech.samples, similarity);
+            speaker = speaker_identifier.identify(speech.samples, similarity);
             char label[64];
             if (speaker == SpeakerIdentifier::UNKNOWN) {
                 std::snprintf(label, sizeof(label), " | speaker ?");
@@ -543,10 +549,17 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         // 앞 구간에서 이어진 말이면 앞 구간과 합쳐서 다시 번역한다. 인식에 실패한 구간은 건너뛴다.
-        const bool merges = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
-                            !text.empty() &&
-                            sentence.fragment_count > 0 && sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
-                            sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
+        // 화자 구분을 믿을 만큼 긴 구간이 앞 문장과 다른 사람의 말이면 합치지 않는다.
+        const double seconds = static_cast<double>(speech.samples.size()) /
+                               static_cast<double>(config.sample_rate * config.channels);
+        const bool confident_speaker = speaker != SpeakerIdentifier::UNKNOWN && seconds >= MIN_SPEAKER_SPLIT_SECONDS;
+        const bool other_speaker = confident_speaker && sentence.speaker != SpeakerIdentifier::UNKNOWN &&
+                                   speaker != sentence.speaker;
+        const bool continues = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
+                               !text.empty() && sentence.fragment_count > 0 &&
+                               sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
+                               sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
+        const bool merges = continues && !other_speaker;
         // 번역문이 만들어지는 동안 만들어진 부분부터 자막으로 보낸다. 긴 문장도 첫 낱말은 금방 뜬다.
         // 합친 문장을 다시 번역할 때는, 화면에 떠 있는 앞 구간의 번역보다 길어진 뒤에 바꿔서 자막이 줄었다 늘지 않게 한다.
         std::optional<Clock::time_point> first_shown_at;
@@ -579,6 +592,9 @@ int wmain(int argc, wchar_t** argv) {
                                     sentence.chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
             }
             ++sentence.fragment_count;
+            if (confident_speaker && sentence.speaker == SpeakerIdentifier::UNKNOWN) {
+                sentence.speaker = speaker;
+            }
             translation = translator.translate(sentence.source, sentence.chat, merges,
                                                options.stream_subtitles ? show_partial : Translator::PartialCallback{});
         }
@@ -594,6 +610,8 @@ int wmain(int argc, wchar_t** argv) {
                     to_ms(finished_at - translation_started_at), chat.size());
         if (merges) {
             std::printf(" | merged %zu", sentence.fragment_count);
+        } else if (continues) {
+            std::printf(" | other speaker");
         }
         std::printf("%s", speaker_label.c_str());
         // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
