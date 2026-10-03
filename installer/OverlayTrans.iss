@@ -45,11 +45,12 @@ Source: "..\build\package\options.txt"; DestDir: "{app}"; Flags: onlyifdoesntexi
 Name: "{app}\models"
 
 [Icons]
-Name: "{autoprograms}\OverLay-Trans"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
-Name: "{autodesktop}\OverLay-Trans"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
+; 기본 콘솔(conhost)로 실행한다. Windows 터미널에서 열리면 앱이 콘솔 창을 숨기지 못한다.
+Name: "{autoprograms}\OverLay-Trans"; Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
+Name: "{autodesktop}\OverLay-Trans"; Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,OverLay-Trans}"; Flags: postinstall nowait skipifsilent
+Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,OverLay-Trans}"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
 ; 설치 후에 생긴 파일(내려받은 모델, 옵션, 페어링 키)도 함께 지운다.

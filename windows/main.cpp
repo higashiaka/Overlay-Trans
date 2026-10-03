@@ -8,6 +8,7 @@
 #include "inference/translator.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
+#include "tray/tray_icon.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -54,6 +55,7 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
+    bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
@@ -106,6 +108,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
+        } else if (name == L"--background") {
+            options.background = value == L"on";
         } else if (name == L"--stream-subtitles") {
             options.stream_subtitles = value != L"off";
         } else if (name == L"--merge-sentences") {
@@ -243,9 +247,24 @@ int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& 
     return 0;
 }
 
-// 시스템 오디오를 캡처해 Enter를 누를 때까지 처리한다.
+// 앱을 끝내라는 신호. 콘솔에서 Enter나 Ctrl+C를 누르거나, 알림 영역 메뉴에서 종료를 고르면 켜진다.
+HANDLE quit_event() {
+    static const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    return event;
+}
+
+BOOL WINAPI on_console_event(DWORD event) {
+    SetEvent(quit_event());
+    // 콘솔 창을 닫으면 이 함수가 끝나는 대로 프로세스가 강제로 끝난다. 정리(알림 영역 아이콘 제거)할 시간을 준다.
+    if (event == CTRL_CLOSE_EVENT || event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT) {
+        Sleep(3000);
+    }
+    return TRUE;
+}
+
+// 시스템 오디오를 캡처해 종료 신호(quit_event)가 올 때까지 처리한다.
 int run_live(const Options& options, const CaptureConfig& config, const VadConfig& vad_config, VadSegmenter& vad,
-             RecognitionWorker& worker) {
+             RecognitionWorker& worker, const std::string& pairing_code) {
     const size_t samples_per_second = static_cast<size_t>(config.sample_rate) * config.channels;
 
     WavWriter wav_dump;
@@ -300,9 +319,29 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
         vad.flush();
     });
 
+    TrayIcon tray;
+    const bool tray_ready = tray.start({
+        .tooltip = L"OverLay-Trans " OVERLAY_TRANS_VERSION_W,
+        .pairing_code = std::wstring(pairing_code.begin(), pairing_code.end()),
+        .on_quit = [] { SetEvent(quit_event()); },
+    });
+    if (!tray_ready) {
+        std::fprintf(stderr, "Failed to create the tray icon. Press Enter in this window to stop.\n");
+    } else if (options.background) {
+        set_console_visible(false);
+        tray.notify(L"OverLay-Trans 실행 중",
+                    L"알림 영역의 아이콘을 오른쪽 클릭하면 페어링 코드 복사, 로그 보기, 종료를 할 수 있습니다.");
+    }
+
     std::printf("Capturing system audio (%u Hz, %u ch). Press Enter to stop.\n", config.sample_rate,
                 config.channels);
-    std::getchar();
+    SetConsoleCtrlHandler(on_console_event, TRUE);
+    // Enter를 기다리는 스레드는 끝낼 방법이 없으므로 떼어 놓는다. 프로세스가 끝나면 함께 끝난다.
+    std::thread([] {
+        std::getchar();
+        SetEvent(quit_event());
+    }).detach();
+    WaitForSingleObject(quit_event(), INFINITE);
 
     capture.stop();
     consumer.request_stop();
@@ -535,5 +574,5 @@ int wmain(int argc, wchar_t** argv) {
     if (!is_live) {
         return run_file(options, config, vad, worker);
     }
-    return run_live(options, config, vad_config, vad, worker);
+    return run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
 }

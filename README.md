@@ -191,10 +191,11 @@ $ git config commit.template .gitmessage
 
 1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
 2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
-3. 콘솔 창에 `Pairing code: ...`가 나오면, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
+3. 준비가 끝나면 창이 숨겨지고 알림 영역(시계 옆)에 아이콘이 생깁니다. 아이콘을 오른쪽 클릭해 "페어링 코드 복사"를 누른 뒤, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
+4. 아이콘 메뉴에서 로그 창을 보거나 앱을 종료할 수 있습니다.
 
 - Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
-- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다.
+- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
 - 제거는 Windows 설정의 "설치된 앱"에서 합니다. 내려받은 모델도 함께 지워집니다.
 
 ### 소스에서 빌드
@@ -242,6 +243,9 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stream
 # 인식 시간이 1/3 정도로 줄지만 인식 결과가 일부 달라짐. 발화가 더 길면 그 발화만 자동으로 늘림. 0이면 모델 전체를 계산
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-audio-ctx 0
 
+# 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둠 (설치본은 기본으로 켜짐). 아이콘 메뉴로 다시 볼 수 있음
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --background on
+
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 ```
@@ -252,7 +256,7 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 
 1. 브라우저 주소창에 `chrome://extensions`(웨일은 `whale://extensions`)를 입력해 엽니다.
 2. "개발자 모드"를 켜고 "압축해제된 확장 프로그램을 로드합니다"를 눌러 `extension` 폴더를 선택합니다.
-3. 앱을 실행하고, 콘솔에 출력된 `Pairing code: ...` 값을 복사합니다.
+3. 앱을 실행하고, 콘솔에 출력된 `Pairing code: ...` 값을 복사합니다. (알림 영역 아이콘 메뉴의 "페어링 코드 복사"로도 복사할 수 있습니다.)
 4. 브라우저의 확장 프로그램 아이콘을 눌러 페어링 코드를 입력하고 "연결"을 누릅니다. (한 번만 하면 됩니다.)
 5. 트위치나 유튜브에서 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
 
