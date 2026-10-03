@@ -21,6 +21,8 @@ constexpr unsigned int MAX_THREADS = 8;
 constexpr int PIECE_BUFFER_SIZE = 256;
 // 만들어지는 중인 번역문을 알리는 최소 간격. 토큰마다 알리면 자막이 지나치게 자주 바뀐다.
 constexpr auto PARTIAL_INTERVAL = std::chrono::milliseconds(120);
+// 같은 토큰이 이만큼 이어지면 번역을 멈춘다. もむもむ… 같은 의성어에서 "모모모…"를 출력 한도까지 되풀이하는 일이 있었다.
+constexpr int MAX_REPEATED_TOKENS = 8;
 
 struct Example {
     const char* source;
@@ -224,9 +226,16 @@ std::string Translator::Impl::generate() {
     std::string text;
     // 첫 낱말은 기다리지 않고 바로 알린다. 그다음부터 PARTIAL_INTERVAL 간격으로 알린다.
     std::chrono::steady_clock::time_point last_partial_at;
+    llama_token previous = LLAMA_TOKEN_NULL;
+    int repeated = 0;
     for (int i = 0; i < config.max_output_tokens; ++i) {
         llama_token token = llama_sampler_sample(active_sampler, context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
+            break;
+        }
+        repeated = token == previous ? repeated + 1 : 1;
+        previous = token;
+        if (repeated > MAX_REPEATED_TOKENS) {
             break;
         }
 
