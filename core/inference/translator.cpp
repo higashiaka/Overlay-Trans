@@ -27,9 +27,14 @@ struct Example {
     const char* translation;
 };
 
+// 번역 형식과 말투를 잡아 주는 예시. 방송에서 자주 틀리던 구어 표현을 골랐다.
+// (やばい를 "위험해"로, 끝이 올라가는 〜くない?를 부정으로, いくぞ를 "힘내"로 옮기는 일이 있었다.)
 constexpr Example KOREAN_EXAMPLES[] = {
     {"え、なんで？どうしたの？", "어, 왜? 무슨 일이야?"},
     {"今日はちょっと早めに終わるかも", "오늘은 좀 일찍 끝날지도 몰라."},
+    {"やばい、これ面白くない？", "헐, 이거 재밌지 않아?"},
+    {"よし、いくぞー！", "좋아, 간다!"},
+    {"あと何だっけ", "또 뭐였더라"},
 };
 
 int default_thread_count() {
@@ -56,10 +61,11 @@ std::string build_system_prompt(const TranslatorConfig& config, const std::strin
     // 방송 용어는 외래어가 많아서, 뜻을 추측해 옮기면 틀리기 쉽다. 애매하면 소리 나는 대로 적게 한다.
     prompt += "Katakana words are usually loanwords, game terms, or names: unless you are sure of the meaning, ";
     prompt += "transliterate them by sound instead of guessing a translation. ";
-    prompt += "Transliterate people's names by sound as well.";
+    prompt += "Transliterate people's names by sound as well. ";
+    prompt += "A question ending in くない? with rising tone asks for agreement (isn't it ~?), not a negative.";
 
     if (config.target_language == "Korean") {
-        prompt += " Examples: スパイク -> 스파이크, エイム -> 에임, ボックス -> 박스, ミントさん -> 민트 님.";
+        prompt += " Examples: スパイク -> 스파이크, エイム -> 에임, ボックス -> 박스, ビンゴ -> 빙고, ミントさん -> 민트 님.";
         prompt += " Write the reply in Hangul only: no Chinese characters and no Japanese kana.";
     }
 
