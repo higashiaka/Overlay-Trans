@@ -24,6 +24,10 @@ if (Test-Path $out) {
 New-Item -ItemType Directory -Force $out | Out-Null
 
 Copy-Item $exe $out
+# 화자 구분(sherpa-onnx)과 ONNX Runtime DLL. 빌드할 때 실행 파일 옆에 복사되어 있다.
+foreach ($dll in @("sherpa-onnx-c-api.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
+    Copy-Item (Join-Path (Split-Path -Parent $exe) $dll) $out
+}
 Copy-Item (Join-Path $PSScriptRoot "OverlayTrans.ps1") $out
 Copy-Item (Join-Path $PSScriptRoot "options.txt") $out
 Copy-Item -Recurse (Join-Path $root "extension") (Join-Path $out "extension")
@@ -56,6 +60,8 @@ $licenseFiles = @{
     "third_party/miniaudio/LICENSE"                    = "miniaudio.txt"
     "third_party/llama.cpp/vendor/cpp-httplib/LICENSE" = "cpp-httplib.txt"
     "third_party/llama.cpp/licenses/LICENSE-jsonhpp"   = "nlohmann-json.txt"
+    "third_party/licenses/sherpa-onnx.txt"             = "sherpa-onnx.txt"
+    "third_party/licenses/onnxruntime.txt"             = "onnxruntime.txt"
 }
 foreach ($source in $licenseFiles.Keys) {
     Copy-Item (Join-Path $root $source) (Join-Path $licenses $licenseFiles[$source])
