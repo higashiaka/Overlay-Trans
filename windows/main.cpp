@@ -54,6 +54,7 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
+    bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
@@ -105,6 +106,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
+        } else if (name == L"--stream-subtitles") {
+            options.stream_subtitles = value != L"off";
         } else if (name == L"--merge-sentences") {
             options.merge_sentences = value != L"off";
         } else if (name == L"--early-stt") {
@@ -194,13 +197,14 @@ struct OpenSentence {
     std::vector<std::string> chat;  // 번역 맥락으로 쓴 채팅
     size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
     int64_t subtitle = 0;           // 화면에 내보낸 자막의 번호
+    std::string translation;        // 화면에 내보낸 번역문
 };
 
-// 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
-// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
 constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
+// 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
+// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
 constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
 constexpr size_t MAX_SENTENCE_BYTES = 180;
 
@@ -450,6 +454,20 @@ int wmain(int argc, wchar_t** argv) {
                             !text.empty() &&
                             sentence.fragment_count > 0 && sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
                             sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
+        // 번역문이 만들어지는 동안 만들어진 부분부터 자막으로 보낸다. 긴 문장도 첫 낱말은 금방 뜬다.
+        // 합친 문장을 다시 번역할 때는, 화면에 떠 있는 앞 구간의 번역보다 길어진 뒤에 바꿔서 자막이 줄었다 늘지 않게 한다.
+        std::optional<Clock::time_point> first_shown_at;
+        const Translator::PartialCallback show_partial = [&](std::string_view partial) {
+            if (partial.size() <= sentence.translation.size()) {
+                return;
+            }
+            sentence.translation = partial;
+            sentence.subtitle = server.publish({sentence.source, sentence.translation, sentence.subtitle});
+            if (!first_shown_at) {
+                first_shown_at = Clock::now();
+            }
+        };
+
         std::string translation;
         if (!text.empty()) {
             if (!merges) {
@@ -468,9 +486,13 @@ int wmain(int argc, wchar_t** argv) {
                                     sentence.chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
             }
             ++sentence.fragment_count;
-            translation = translator.translate(sentence.source, sentence.chat, merges);
+            translation = translator.translate(sentence.source, sentence.chat, merges,
+                                               options.stream_subtitles ? show_partial : Translator::PartialCallback{});
         }
         const auto finished_at = Clock::now();
+        if (!translation.empty() && !first_shown_at) {
+            first_shown_at = finished_at;
+        }
 
         std::printf("[%.2f s audio | STT %lld ms%s | translation %lld ms | chat %zu",
                     static_cast<double>(speech.samples.size()) /
@@ -481,15 +503,20 @@ int wmain(int argc, wchar_t** argv) {
             std::printf(" | merged %zu", sentence.fragment_count);
         }
         // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
+        // first는 첫 자막이 뜬 시점, delay는 번역문이 완성된 시점까지의 지연이다.
         if (is_live) {
+            if (first_shown_at) {
+                std::printf(" | first %lld ms", to_ms(*first_shown_at - speech.speech_ended_at));
+            }
             std::printf(" | delay %lld ms", to_ms(finished_at - speech.speech_ended_at));
         }
         std::printf("]\n  %s\n  %s\n", (merges ? sentence.source : text).c_str(), translation.c_str());
         std::fflush(stdout);
 
-        // 합친 문장의 번역은 화면에 있는 앞 구간의 자막을 대신한다.
+        // 완성된 번역문으로 화면의 자막(만들어지던 중의 자막이나 합치기 전 앞 구간의 자막)을 바꾼다.
         if (!translation.empty()) {
-            sentence.subtitle = server.publish({sentence.source, translation, merges ? sentence.subtitle : 0});
+            sentence.translation = translation;
+            sentence.subtitle = server.publish({sentence.source, translation, sentence.subtitle});
         }
     });
 

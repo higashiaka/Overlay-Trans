@@ -12,7 +12,9 @@ namespace overlay_trans {
 struct VadConfig {
     float threshold = 0.5f;          // 이 확률 이상이면 음성으로 본다.
     uint32_t min_speech_ms = 250;    // 이보다 짧은 발화는 버린다.
-    uint32_t min_silence_ms = 480;   // 이만큼 무음이 이어지면 발화가 끝난 것으로 본다.
+    // 이만큼 무음이 이어지면 발화가 끝난 것으로 본다. 짧을수록 자막이 빨리 뜨고 문장은 잘게 끊기지만,
+    // 끊긴 문장은 이어서 합쳐 다시 번역하므로(windows/main.cpp) 짧게 둔다.
+    uint32_t min_silence_ms = 320;
     uint32_t speech_pad_ms = 200;    // 발화 앞뒤에 남겨 두는 여유 구간.
 
     // 길게 이어지는 말은 끝날 때까지 기다리면 자막이 너무 늦어지므로 중간에 끊는다.
