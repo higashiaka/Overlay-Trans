@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OverLay-Trans",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "OverLay-Trans 앱이 만든 실시간 번역 자막을 방송 영상 위에 표시합니다.",
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1/*"],
