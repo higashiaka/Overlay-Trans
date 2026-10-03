@@ -22,3 +22,8 @@ target_link_libraries(OverlayTransWin PRIVATE
     shell32
     user32
 )
+
+# sherpa-onnx와 ONNX Runtime DLL을 실행 파일 옆에 복사한다. (화자 구분)
+add_custom_command(TARGET OverlayTransWin POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OVERLAY_SHERPA_ONNX_DLLS} $<TARGET_FILE_DIR:OverlayTransWin>
+)
