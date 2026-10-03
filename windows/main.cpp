@@ -500,17 +500,6 @@ int wmain(int argc, wchar_t** argv) {
 
         const std::string& text = speech.text;
 
-        // 감탄사나 웃음소리만 있는 구간은 번역하지 않는다. 앞 문장에 합쳐 다시 번역하면 맞던 번역이 바뀌는 일이 있었다.
-        // (体力上がるやすごー + ん -> "체력이 오르길 막막해") 합치고 있던 문장은 그대로 두어, 다음 구간이 이어서 합쳐질 수 있다.
-        if (is_japanese_interjection(text)) {
-            std::printf("[%.2f s audio | STT %lld ms%s | skipped]\n  %s\n",
-                        static_cast<double>(speech.samples.size()) /
-                            static_cast<double>(config.sample_rate * config.channels),
-                        to_ms(speech.recognition_time), speech.started_early ? " (early)" : "", text.c_str());
-            std::fflush(stdout);
-            return;
-        }
-
         const auto translation_started_at = Clock::now();
 
         // 이 발화 직전까지 올라온 채팅을 번역의 맥락으로 쓴다. 오래된 채팅은 버리고, 한 번 쓴 채팅은 다시 쓰지 않는다.
@@ -529,8 +518,10 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         // 앞 구간에서 이어진 말이면 앞 구간과 합쳐서 다시 번역한다. 인식에 실패한 구간은 건너뛴다.
+        // 감탄사나 웃음소리만 있는 구간은 앞 문장에 합치지 않고 따로 번역한다. 합쳐서 다시 번역하면 맞던 번역이
+        // 바뀌는 일이 있었다. (体力上がるやすごー + ん -> "체력이 오르길 막막해") 뒤에 이어지는 말은 감탄사에 합칠 수 있다.
         const bool continues = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
-                               !text.empty() && sentence.fragment_count > 0 &&
+                               !text.empty() && !is_japanese_interjection(text) && sentence.fragment_count > 0 &&
                                sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
                                sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
 
