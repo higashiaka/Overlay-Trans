@@ -2,10 +2,14 @@ add_executable(OverlayTransWin
     main.cpp
     capture/audio_file_reader.cpp
     capture/loopback_capture.cpp
+    tray/tray_icon.cpp
 )
 
 target_include_directories(OverlayTransWin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(OverlayTransWin PRIVATE OVERLAY_TRANS_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(OverlayTransWin PRIVATE
+    OVERLAY_TRANS_VERSION="${PROJECT_VERSION}"
+    OVERLAY_TRANS_VERSION_W=L"${PROJECT_VERSION}"
+)
 target_link_libraries(OverlayTransWin PRIVATE
     overlay_core
     overlay_miniaudio
@@ -14,6 +18,7 @@ target_link_libraries(OverlayTransWin PRIVATE
     mfreadwrite
     mfuuid
     ole32
-    # 로컬 앱 데이터 폴더 조회
+    # 로컬 앱 데이터 폴더 조회, 알림 영역 아이콘
     shell32
+    user32
 )

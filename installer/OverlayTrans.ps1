@@ -49,7 +49,8 @@ foreach ($model in $modelFiles) {
 }
 
 # options.txt: 한 줄에 옵션 하나. "--이름 값" 형식이며 값에 공백이 있어도 따옴표 없이 적는다.
-$arguments = @()
+# 시작하면 이 창을 숨기고 알림 영역 아이콘으로 둔다. options.txt에 "--background off"를 적으면 창을 그대로 둔다.
+$arguments = @("--background", "on")
 $optionsFile = Join-Path $app "options.txt"
 if (Test-Path $optionsFile) {
     foreach ($line in Get-Content -Encoding UTF8 $optionsFile) {
@@ -66,7 +67,8 @@ if (Test-Path $optionsFile) {
 }
 
 Write-Host "브라우저 확장 프로그램 폴더: $(Join-Path $app 'extension')"
-Write-Host "아래에 나오는 Pairing code를 확장 프로그램에 입력하세요. 종료하려면 Enter를 누릅니다."
+Write-Host "앱이 시작되면 이 창은 숨겨지고 알림 영역(시계 옆)에 아이콘이 생깁니다."
+Write-Host "아이콘을 오른쪽 클릭하면 페어링 코드 복사, 로그 보기, 종료를 할 수 있습니다."
 Write-Host ""
 
 Set-Location $app

@@ -8,6 +8,7 @@
 #include "inference/translator.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
+#include "tray/tray_icon.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -54,6 +55,8 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
+    bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
+    bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
@@ -105,6 +108,10 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
+        } else if (name == L"--background") {
+            options.background = value == L"on";
+        } else if (name == L"--stream-subtitles") {
+            options.stream_subtitles = value != L"off";
         } else if (name == L"--merge-sentences") {
             options.merge_sentences = value != L"off";
         } else if (name == L"--early-stt") {
@@ -194,13 +201,14 @@ struct OpenSentence {
     std::vector<std::string> chat;  // 번역 맥락으로 쓴 채팅
     size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
     int64_t subtitle = 0;           // 화면에 내보낸 자막의 번호
+    std::string translation;        // 화면에 내보낸 번역문
 };
 
-// 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
-// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
 constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
+// 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
+// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
 constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
 constexpr size_t MAX_SENTENCE_BYTES = 180;
 
@@ -239,9 +247,24 @@ int run_file(const Options& options, const CaptureConfig& config, VadSegmenter& 
     return 0;
 }
 
-// 시스템 오디오를 캡처해 Enter를 누를 때까지 처리한다.
+// 앱을 끝내라는 신호. 콘솔에서 Enter나 Ctrl+C를 누르거나, 알림 영역 메뉴에서 종료를 고르면 켜진다.
+HANDLE quit_event() {
+    static const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    return event;
+}
+
+BOOL WINAPI on_console_event(DWORD event) {
+    SetEvent(quit_event());
+    // 콘솔 창을 닫으면 이 함수가 끝나는 대로 프로세스가 강제로 끝난다. 정리(알림 영역 아이콘 제거)할 시간을 준다.
+    if (event == CTRL_CLOSE_EVENT || event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT) {
+        Sleep(3000);
+    }
+    return TRUE;
+}
+
+// 시스템 오디오를 캡처해 종료 신호(quit_event)가 올 때까지 처리한다.
 int run_live(const Options& options, const CaptureConfig& config, const VadConfig& vad_config, VadSegmenter& vad,
-             RecognitionWorker& worker) {
+             RecognitionWorker& worker, const std::string& pairing_code) {
     const size_t samples_per_second = static_cast<size_t>(config.sample_rate) * config.channels;
 
     WavWriter wav_dump;
@@ -296,9 +319,29 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
         vad.flush();
     });
 
+    TrayIcon tray;
+    const bool tray_ready = tray.start({
+        .tooltip = L"OverLay-Trans " OVERLAY_TRANS_VERSION_W,
+        .pairing_code = std::wstring(pairing_code.begin(), pairing_code.end()),
+        .on_quit = [] { SetEvent(quit_event()); },
+    });
+    if (!tray_ready) {
+        std::fprintf(stderr, "Failed to create the tray icon. Press Enter in this window to stop.\n");
+    } else if (options.background) {
+        set_console_visible(false);
+        tray.notify(L"OverLay-Trans 실행 중",
+                    L"알림 영역의 아이콘을 오른쪽 클릭하면 페어링 코드 복사, 로그 보기, 종료를 할 수 있습니다.");
+    }
+
     std::printf("Capturing system audio (%u Hz, %u ch). Press Enter to stop.\n", config.sample_rate,
                 config.channels);
-    std::getchar();
+    SetConsoleCtrlHandler(on_console_event, TRUE);
+    // Enter를 기다리는 스레드는 끝낼 방법이 없으므로 떼어 놓는다. 프로세스가 끝나면 함께 끝난다.
+    std::thread([] {
+        std::getchar();
+        SetEvent(quit_event());
+    }).detach();
+    WaitForSingleObject(quit_event(), INFINITE);
 
     capture.stop();
     consumer.request_stop();
@@ -450,6 +493,20 @@ int wmain(int argc, wchar_t** argv) {
                             !text.empty() &&
                             sentence.fragment_count > 0 && sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
                             sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
+        // 번역문이 만들어지는 동안 만들어진 부분부터 자막으로 보낸다. 긴 문장도 첫 낱말은 금방 뜬다.
+        // 합친 문장을 다시 번역할 때는, 화면에 떠 있는 앞 구간의 번역보다 길어진 뒤에 바꿔서 자막이 줄었다 늘지 않게 한다.
+        std::optional<Clock::time_point> first_shown_at;
+        const Translator::PartialCallback show_partial = [&](std::string_view partial) {
+            if (partial.size() <= sentence.translation.size()) {
+                return;
+            }
+            sentence.translation = partial;
+            sentence.subtitle = server.publish({sentence.source, sentence.translation, sentence.subtitle});
+            if (!first_shown_at) {
+                first_shown_at = Clock::now();
+            }
+        };
+
         std::string translation;
         if (!text.empty()) {
             if (!merges) {
@@ -468,9 +525,13 @@ int wmain(int argc, wchar_t** argv) {
                                     sentence.chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
             }
             ++sentence.fragment_count;
-            translation = translator.translate(sentence.source, sentence.chat, merges);
+            translation = translator.translate(sentence.source, sentence.chat, merges,
+                                               options.stream_subtitles ? show_partial : Translator::PartialCallback{});
         }
         const auto finished_at = Clock::now();
+        if (!translation.empty() && !first_shown_at) {
+            first_shown_at = finished_at;
+        }
 
         std::printf("[%.2f s audio | STT %lld ms%s | translation %lld ms | chat %zu",
                     static_cast<double>(speech.samples.size()) /
@@ -481,15 +542,20 @@ int wmain(int argc, wchar_t** argv) {
             std::printf(" | merged %zu", sentence.fragment_count);
         }
         // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
+        // first는 첫 자막이 뜬 시점, delay는 번역문이 완성된 시점까지의 지연이다.
         if (is_live) {
+            if (first_shown_at) {
+                std::printf(" | first %lld ms", to_ms(*first_shown_at - speech.speech_ended_at));
+            }
             std::printf(" | delay %lld ms", to_ms(finished_at - speech.speech_ended_at));
         }
         std::printf("]\n  %s\n  %s\n", (merges ? sentence.source : text).c_str(), translation.c_str());
         std::fflush(stdout);
 
-        // 합친 문장의 번역은 화면에 있는 앞 구간의 자막을 대신한다.
+        // 완성된 번역문으로 화면의 자막(만들어지던 중의 자막이나 합치기 전 앞 구간의 자막)을 바꾼다.
         if (!translation.empty()) {
-            sentence.subtitle = server.publish({sentence.source, translation, merges ? sentence.subtitle : 0});
+            sentence.translation = translation;
+            sentence.subtitle = server.publish({sentence.source, translation, sentence.subtitle});
         }
     });
 
@@ -508,5 +574,5 @@ int wmain(int argc, wchar_t** argv) {
     if (!is_live) {
         return run_file(options, config, vad, worker);
     }
-    return run_live(options, config, vad_config, vad, worker);
+    return run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
 }
