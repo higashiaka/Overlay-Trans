@@ -4,7 +4,7 @@
 #include "capture/audio_file_reader.h"
 #include "capture/loopback_capture.h"
 #include "inference/recognition_worker.h"
-#include "inference/speaker_identifier.h"
+#include "inference/voice_matcher.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
 #include "server/pairing_token.h"
@@ -43,14 +43,14 @@ using Clock = std::chrono::steady_clock;
 constexpr const char* DEFAULT_VAD_MODEL = "ggml-silero-v6.2.0.bin";
 constexpr const char* DEFAULT_STT_MODEL = "ggml-large-v3-turbo-q5_0.bin";
 constexpr const char* DEFAULT_LLM_MODEL = "gemma-3-4b-it-Q4_K_M.gguf";
-constexpr const char* DEFAULT_SPEAKER_MODEL = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
+constexpr const char* DEFAULT_VOICE_MODEL = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
 
 struct Options {
     // 지정하지 않으면 모델 폴더(default_models_folder)의 기본 모델을 쓴다.
     std::filesystem::path vad_model;
     std::filesystem::path stt_model;
     std::filesystem::path llm_model;
-    std::filesystem::path speaker_model;
+    std::filesystem::path voice_model;
     std::filesystem::path input_file;  // 비어 있으면 시스템 오디오를 캡처한다.
     std::filesystem::path dump_wav;    // 비어 있으면 덤프하지 않는다.
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
@@ -59,7 +59,7 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
-    bool speakers = true;  // 발화마다 화자를 구분해, 다른 사람의 말은 앞 문장에 합치지 않을지
+    bool voice_match = true;  // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지
     bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
@@ -113,10 +113,10 @@ Options parse_options(int argc, wchar_t** argv) {
             options.language = to_utf8(value);
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
-        } else if (name == L"--speakers") {
-            options.speakers = value == L"on";
-        } else if (name == L"--speaker-model") {
-            options.speaker_model = value;
+        } else if (name == L"--voice-match") {
+            options.voice_match = value != L"off";
+        } else if (name == L"--voice-model") {
+            options.voice_model = value;
         } else if (name == L"--background") {
             options.background = value == L"on";
         } else if (name == L"--stream-subtitles") {
@@ -150,8 +150,8 @@ Options parse_options(int argc, wchar_t** argv) {
     if (options.llm_model.empty()) {
         options.llm_model = models_folder / DEFAULT_LLM_MODEL;
     }
-    if (options.speaker_model.empty()) {
-        options.speaker_model = models_folder / DEFAULT_SPEAKER_MODEL;
+    if (options.voice_model.empty()) {
+        options.voice_model = models_folder / DEFAULT_VOICE_MODEL;
     }
     return options;
 }
@@ -214,12 +214,16 @@ struct OpenSentence {
     size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
     int64_t subtitle = 0;           // 화면에 내보낸 자막의 번호
     std::string translation;        // 화면에 내보낸 번역문
-    int speaker = SpeakerIdentifier::UNKNOWN;  // 이 문장을 말한 화자. 확실히 구분된 구간이 없으면 UNKNOWN.
+    std::vector<float> tail_voice;  // 마지막 구간의 끝부분 목소리 특징. 뽑지 못했으면 비어 있다.
 };
 
-// 화자 구분을 믿을 수 있는 최소 구간 길이(초). 이보다 짧은 구간은 같은 사람이어도 다른 화자로 잡히는 일이 잦아서,
-// 다른 화자라도 문장을 나누는 데 쓰지 않는다.
-constexpr double MIN_SPEAKER_SPLIT_SECONDS = 1.5;
+// 앞뒤 구간의 목소리를 비교할 때 쓰는 길이(초). 앞 구간은 끝부분, 새 구간은 앞부분만 본다.
+// 구간 전체를 쓰면 그 안에 여러 사람이 섞여 있을 때 목소리 특징이 흐려진다.
+constexpr double VOICE_EDGE_SECONDS = 1.5;
+// 맞닿은 부분의 목소리 유사도가 이보다 낮으면 다른 사람의 말로 보고 합치지 않는다.
+// 여러 사람이 주고받는 클립 7개와 혼자 하는 방송 녹화본으로 정했다. 다른 사람 말을 합치는 일이 77% 줄고,
+// 혼자 하는 방송에서는 합치던 것의 94%를 그대로 합친다.
+constexpr float SAME_VOICE_SIMILARITY = 0.5f;
 
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
@@ -465,14 +469,12 @@ int wmain(int argc, wchar_t** argv) {
 
     // 인식과 번역은 오디오를 받는 스레드와 따로 돌린다. 인식하는 동안에도 발화 구간을 계속 찾아야
     // 다음 발화의 인식을 제때 미리 시작할 수 있다.
-    // 게임 음성 등 진행자가 아닌 목소리가 진행자의 말에 합쳐져 함께 다시 번역되지 않게 화자를 구분한다.
-    SpeakerIdentifier speaker_identifier;
-    if (options.speakers && !speaker_identifier.init(options.speaker_model, {})) {
-        std::fprintf(stderr, "Failed to load speaker model: %s\n", to_utf8(options.speaker_model).c_str());
+    // 다른 사람(게임 음성, 함께 방송하는 사람)의 말이 앞 문장에 합쳐져 함께 다시 번역되지 않게 목소리를 비교한다.
+    VoiceMatcher voice_matcher;
+    if (options.voice_match && !voice_matcher.init(options.voice_model)) {
+        std::fprintf(stderr, "Failed to load voice model: %s\n", to_utf8(options.voice_model).c_str());
         return 1;
     }
-
-    std::string applied_channel;  // 화자 목록을 만든 방송의 채널
 
     const bool is_live = options.input_file.empty();
     OpenSentence sentence;
@@ -494,39 +496,17 @@ int wmain(int argc, wchar_t** argv) {
                 applied_stream_info = stream_info;
                 std::printf("Stream context: %s\n", stream_info.c_str());
             }
-            // 다른 방송으로 옮기면 앞 방송의 목소리는 더 나오지 않으므로 기억한 화자를 잊는다.
-            if (!context->channel.empty() && context->channel != applied_channel) {
-                speaker_identifier.reset();
-                applied_channel = context->channel;
-            }
         }
 
         const std::string& text = speech.text;
 
-        // 로그에 붙일 화자 표시. "speaker 1 (0.72)"처럼 화자 번호와 그 화자와의 유사도를 적고, 진행자로 보이는 화자에는 *를 붙인다.
-        std::string speaker_label;
-        int speaker = SpeakerIdentifier::UNKNOWN;
-        if (options.speakers) {
-            float similarity = 0.0f;
-            speaker = speaker_identifier.identify(speech.samples, similarity);
-            char label[64];
-            if (speaker == SpeakerIdentifier::UNKNOWN) {
-                std::snprintf(label, sizeof(label), " | speaker ?");
-            } else {
-                std::snprintf(label, sizeof(label), " | speaker %d%s (%.2f)", speaker,
-                              speaker == speaker_identifier.main_speaker() ? "*" : "", similarity);
-            }
-            speaker_label = label;
-        }
-
         // 감탄사나 웃음소리만 있는 구간은 번역하지 않는다. 앞 문장에 합쳐 다시 번역하면 맞던 번역이 바뀌는 일이 있었다.
         // (体力上がるやすごー + ん -> "체력이 오르길 막막해") 합치고 있던 문장은 그대로 두어, 다음 구간이 이어서 합쳐질 수 있다.
         if (is_japanese_interjection(text)) {
-            std::printf("[%.2f s audio | STT %lld ms%s%s | skipped]\n  %s\n",
+            std::printf("[%.2f s audio | STT %lld ms%s | skipped]\n  %s\n",
                         static_cast<double>(speech.samples.size()) /
                             static_cast<double>(config.sample_rate * config.channels),
-                        to_ms(speech.recognition_time), speech.started_early ? " (early)" : "",
-                        speaker_label.c_str(), text.c_str());
+                        to_ms(speech.recognition_time), speech.started_early ? " (early)" : "", text.c_str());
             std::fflush(stdout);
             return;
         }
@@ -549,17 +529,25 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         // 앞 구간에서 이어진 말이면 앞 구간과 합쳐서 다시 번역한다. 인식에 실패한 구간은 건너뛴다.
-        // 화자 구분을 믿을 만큼 긴 구간이 앞 문장과 다른 사람의 말이면 합치지 않는다.
-        const double seconds = static_cast<double>(speech.samples.size()) /
-                               static_cast<double>(config.sample_rate * config.channels);
-        const bool confident_speaker = speaker != SpeakerIdentifier::UNKNOWN && seconds >= MIN_SPEAKER_SPLIT_SECONDS;
-        const bool other_speaker = confident_speaker && sentence.speaker != SpeakerIdentifier::UNKNOWN &&
-                                   speaker != sentence.speaker;
         const bool continues = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
                                !text.empty() && sentence.fragment_count > 0 &&
                                sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
                                sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;
-        const bool merges = continues && !other_speaker;
+
+        // 앞 구간의 끝부분과 이 구간의 앞부분 목소리가 다르면 다른 사람의 말로 보고 합치지 않는다.
+        // 목소리 특징을 뽑지 못한 짧은 구간은 비교하지 않고 합친다.
+        const size_t edge_samples = static_cast<size_t>(VOICE_EDGE_SECONDS * config.sample_rate * config.channels);
+        std::vector<float> head_voice;
+        std::vector<float> tail_voice;
+        if (options.voice_match && !text.empty()) {
+            head_voice = voice_matcher.embed(speech.samples.first(std::min(edge_samples, speech.samples.size())));
+            tail_voice = speech.samples.size() <= edge_samples
+                             ? head_voice
+                             : voice_matcher.embed(speech.samples.last(edge_samples));
+        }
+        const bool compared = continues && !head_voice.empty() && !sentence.tail_voice.empty();
+        const float voice_similarity = compared ? VoiceMatcher::similarity(sentence.tail_voice, head_voice) : 0.0f;
+        const bool merges = continues && (!compared || voice_similarity >= SAME_VOICE_SIMILARITY);
         // 번역문이 만들어지는 동안 만들어진 부분부터 자막으로 보낸다. 긴 문장도 첫 낱말은 금방 뜬다.
         // 합친 문장을 다시 번역할 때는, 화면에 떠 있는 앞 구간의 번역보다 길어진 뒤에 바꿔서 자막이 줄었다 늘지 않게 한다.
         std::optional<Clock::time_point> first_shown_at;
@@ -592,8 +580,8 @@ int wmain(int argc, wchar_t** argv) {
                                     sentence.chat.end() - static_cast<std::ptrdiff_t>(MAX_CHAT_LINES));
             }
             ++sentence.fragment_count;
-            if (confident_speaker && sentence.speaker == SpeakerIdentifier::UNKNOWN) {
-                sentence.speaker = speaker;
+            if (!tail_voice.empty()) {
+                sentence.tail_voice = std::move(tail_voice);
             }
             translation = translator.translate(sentence.source, sentence.chat, merges,
                                                options.stream_subtitles ? show_partial : Translator::PartialCallback{});
@@ -611,9 +599,12 @@ int wmain(int argc, wchar_t** argv) {
         if (merges) {
             std::printf(" | merged %zu", sentence.fragment_count);
         } else if (continues) {
-            std::printf(" | other speaker");
+            std::printf(" | other voice");
         }
-        std::printf("%s", speaker_label.c_str());
+        // 앞 구간과 목소리를 비교했으면 그 유사도를 적는다.
+        if (compared) {
+            std::printf(" | voice %.2f", voice_similarity);
+        }
         // 파일은 실제 속도보다 빠르게 처리하므로 지연 시간에 의미가 없다.
         // first는 첫 자막이 뜬 시점, delay는 번역문이 완성된 시점까지의 지연이다.
         if (is_live) {
