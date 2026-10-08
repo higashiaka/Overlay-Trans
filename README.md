@@ -344,17 +344,37 @@ $ ./build/cl/windows/OverlayTransWin.exe --language ja
 
 - OpenCL 빌드에서도 음성 인식은 CPU로 처리합니다. whisper.cpp가 OpenCL 백엔드에 모델을 올리지 못하기 때문입니다.
 - 스냅드래곤 X(ARMv8.7) 전용으로 빌드되므로 그보다 오래된 ARM 프로세서에서는 실행되지 않습니다.
-- 기본 STT 모델(large-v3-turbo)은 CPU에서 발화 하나에 7초 이상 걸립니다. `--stt-model`로 base 같은 작은 모델을 지정하세요.
+- 기본 STT 모델(large-v3-turbo)은 CPU에서 발화 하나에 9초 가까이 걸려 쓸 수 없습니다. `--stt-model`로 small을 지정하세요.
 
-#### 측정 결과 (Snapdragon X X1-26-100 / Adreno X1-45, 영어 샘플 파일)
+```bash
+$ curl -L -o core/models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+$ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/models/ggml-small.bin
+```
 
-| 구성 | STT | 번역 (Gemma 3 4B) |
+#### 측정 결과 (Snapdragon X X1-26-100 8코어 / Adreno X1-45, 전원 연결)
+
+일본어 문장 8개를 이은 98초 분량의 파일을 처리한 결과입니다. 번역 시간은 앞 문장에 합치지 않은 새 문장 기준입니다.
+
+발화 구간 하나당 STT 처리 시간 (CPU):
+
+| STT 모델 | 처리 시간 | 인식 품질 |
 | --- | --- | --- |
-| STT large-v3-turbo-q5_0, CPU | 약 7~12초 | - |
-| STT base, 번역 CPU | 약 0.3~0.5초 | 약 1~2.5초 |
-| STT base, 번역 Adreno GPU | 약 0.3~0.5초 | 약 1.4~2.8초 |
+| base | 약 0.4초 | 낱말을 자주 틀림 (凍結 → 統結, H2A → A12a) |
+| small | 약 1.4초 | 대체로 맞음 |
+| large-v3-turbo-q5_0 | 약 8.7초 | - |
 
-앞 문장에 합쳐 다시 번역하는 경우는 4~8초까지 걸렸습니다. 이 GPU에서는 번역을 GPU에 올려도 CPU보다 빨라지지 않았습니다.
+번역 시간:
+
+| 번역 모델 | 장치 | 번역 평균 | 번역 품질 |
+| --- | --- | --- | --- |
+| Gemma 3 4B | CPU | 약 1.4초 | 자연스러움 |
+| Gemma 3 4B | Adreno GPU | 약 2.5초 | 위와 같음 |
+| Qwen 3.5 2B | CPU | 약 0.8초 | 뜻이 자주 틀리고 따옴표와 "라고 말합니다"를 덧붙임 |
+| Qwen 3.5 2B | Adreno GPU | 약 1.1초 | 위와 같음 |
+
+- 이 GPU에서는 번역을 GPU에 올려도 CPU보다 느리고, 음성 인식도 0.4초에서 1.1초로 느려집니다. CPU 빌드(`windows-arm64`)에 STT small, 번역 Gemma 3 4B 조합을 권합니다.
+- 앞 문장에 합쳐 다시 번역하면 평균 3.5~4초가 걸립니다. 특히 시작한 뒤 첫 문장에 합치는 경우에는 지시문 전체(약 350토큰)를 다시 계산해 4~6초가 걸립니다.
+- 스레드는 코어 수에서 두 개를 뺀 만큼 씁니다. 8코어에서 같은 파일을 처리한 시간은 4개 59초, 6개 51초, 8개 105초였습니다.
 
 ### 릴리즈 만들기
 

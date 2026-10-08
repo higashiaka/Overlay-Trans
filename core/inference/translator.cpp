@@ -40,7 +40,14 @@ constexpr Example KOREAN_EXAMPLES[] = {
 };
 
 int default_thread_count() {
-    return static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_THREADS));
+    const unsigned int cores = std::thread::hardware_concurrency();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    // ARM 프로세서는 코어 하나에 스레드가 하나라 절반으로 줄일 이유가 없다. 다만 전부 쓰면 오히려 느려져 두 개를 남긴다.
+    // (스냅드래곤 X 8코어에서 같은 음성을 처리한 시간: 4개 59초, 6개 51초, 8개 105초)
+    return static_cast<int>(std::clamp(cores > 2 ? cores - 2 : 1u, 1u, MAX_THREADS));
+#else
+    return static_cast<int>(std::clamp(cores / 2, 1u, MAX_THREADS));
+#endif
 }
 
 // llama.cpp는 모델 로딩 과정을 INFO 로그로 길게 남기므로 경고와 오류만 출력한다.
