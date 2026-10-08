@@ -1,5 +1,8 @@
-# v로 시작하는 태그를 올리면 Windows 설치 프로그램을 만들어 릴리즈 초안에 올린다.
-# Actions 탭에서 직접 실행하면 설치 프로그램만 만들어 실행 결과(Artifacts)에 올린다.
+# v로 시작하는 태그를 올리면 Windows 설치 프로그램과 패키지를 만들어 릴리즈 초안에 올린다.
+# Actions 탭에서 직접 실행하면 만들기만 해서 실행 결과(Artifacts)에 올린다.
+#
+# 설치 프로그램에는 앱이 들어 있지 않다. PC의 프로세서에 맞는 패키지(zip)를 릴리즈에서 내려받아 설치하므로,
+# 패키지와 설치 프로그램을 같은 릴리즈에 함께 올려야 한다.
 name: Release
 
 on:
@@ -11,14 +14,30 @@ permissions:
   contents: write
 
 jobs:
-  windows-installer:
+  package:
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64-vulkan
+            preset: windows-x64-vulkan
+            build-dir: build/vk
+            arch: x64
+            backend: vulkan
+          # ARM64는 x64 러너에서 Clang으로 교차 빌드한다.
+          - name: arm64-cpu
+            preset: windows-arm64
+            build-dir: build/arm64
+            arch: arm64
+            backend: cpu
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Vulkan SDK 설치
+        if: matrix.backend == 'vulkan'
         shell: pwsh
         run: |
           $ProgressPreference = "SilentlyContinue"
@@ -35,43 +54,68 @@ jobs:
       - name: 빌드
         shell: pwsh
         run: |
-          cmake --preset windows-x64-vulkan
+          cmake --preset ${{ matrix.preset }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build --preset windows-x64-vulkan --target OverlayTransWin
+          cmake --build --preset ${{ matrix.preset }} --target OverlayTransWin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: 설치할 파일 모으기
-        id: package
+      - name: 패키지 만들기
+        shell: pwsh
+        run: ./installer/package.ps1 -BuildDir ${{ matrix.build-dir }} -Arch ${{ matrix.arch }} -Backend ${{ matrix.backend }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.name }}
+          path: build/installer/*.zip
+          if-no-files-found: error
+
+  installer:
+    needs: package
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 버전 확인
+        id: version
         shell: pwsh
         run: |
-          $version = ./installer/package.ps1 | Select-Object -Last 1
+          $cmake = Get-Content CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(OverlayTrans VERSION (\d+\.\d+\.\d+)') {
+            throw "Project version not found in CMakeLists.txt"
+          }
+          $version = $Matches[1]
           # 태그로 실행했으면 태그와 CMakeLists.txt의 버전이 같아야 한다.
           if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME does not match the project version $version"
           }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      # 패키지 zip을 build/installer에 모은다. 설치 프로그램에 이 파일들의 SHA-256이 들어간다.
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: package-*
+          path: build/installer
+          merge-multiple: true
+
       - name: 설치 프로그램 만들기
         shell: pwsh
         run: |
           choco upgrade innosetup --no-progress -y
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.package.outputs.version }}" installer\OverlayTrans.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./installer/make-installer.ps1
 
-      # 압축하지 않고 설치 프로그램 파일 그대로 올린다. (파일 하나만 올릴 수 있다.)
       - uses: actions/upload-artifact@v7
         with:
-          path: build/installer/OverlayTrans-Setup-${{ steps.package.outputs.version }}.exe
-          archive: false
+          name: installer
+          path: build/installer/OverlayTrans-Setup-${{ steps.version.outputs.version }}.exe
           if-no-files-found: error
 
-      # 초안으로 올린다. 내용을 확인한 뒤 GitHub에서 직접 공개한다.
+      # 초안으로 올린다. 내용을 확인한 뒤 GitHub에서 직접 공개한다. 공개하기 전에는 설치 프로그램이 패키지를 내려받지 못한다.
       - name: 릴리즈 초안 만들기
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $file = Get-Item build/installer/*.exe
-          gh release create $env:GITHUB_REF_NAME $file.FullName --draft --generate-notes --title "OverLay-Trans ${{ steps.package.outputs.version }}"
+          $files = Get-ChildItem build/installer -File | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME @files --draft --generate-notes --title "OverLay-Trans ${{ steps.version.outputs.version }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

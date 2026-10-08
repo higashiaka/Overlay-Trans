@@ -187,15 +187,24 @@ $ git config commit.template .gitmessage
 
 ## 8. 빌드 및 실행 방식
 
-### 설치 프로그램으로 설치 (Windows x64)
+### 설치 프로그램으로 설치 (Windows x64, ARM64)
 
-1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
+1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 설치 프로그램이 PC의 프로세서를 확인해 맞는 앱을 내려받으므로 인터넷 연결이 필요합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
 2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
 3. 준비가 끝나면 창이 숨겨지고 알림 영역(시계 옆)에 아이콘이 생깁니다. 아이콘을 오른쪽 클릭해 "페어링 코드 복사"를 누른 뒤, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
 4. 아이콘 메뉴에서 로그 창을 보거나 앱을 종료할 수 있습니다.
 
-- Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
-- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
+설치 프로그램이 고르는 앱은 프로세서에 따라 다릅니다.
+
+| 프로세서 | 받는 앱 | 음성 인식 | 번역 |
+| --- | --- | --- | --- |
+| x64 (AMD, Intel) | Vulkan 빌드 | large-v3-turbo, GPU | Gemma 3 4B, GPU |
+| ARM64 (스냅드래곤 X) | CPU 빌드 | small, CPU | Gemma 3 4B, CPU |
+
+- x64는 Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
+- 스냅드래곤 X는 GPU를 쓰지 않습니다. Adreno GPU로는 CPU보다 느렸습니다. ([측정 결과](#측정-결과-snapdragon-x-x1-26-100-8코어--adreno-x1-45-전원-연결))
+- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`가 들어 있고, x64에는 `--llm-gpu-layers 16`(VRAM 8GB 기준), ARM64에는 `--stt-model models\ggml-small.bin`이 더 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
+- 음성 인식 모델을 바꾸려면 `--stt-model models\ggml-base.bin`처럼 whisper.cpp 모델 이름을 적습니다. 없는 모델은 다음에 실행할 때 내려받습니다.
 - 제거는 Windows 설정의 "설치된 앱"에서 합니다. 내려받은 모델도 함께 지워집니다.
 
 ### 소스에서 빌드
@@ -378,20 +387,29 @@ $ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/model
 
 ### 릴리즈 만들기
 
-`.github/workflows/release.yml`이 Windows 설치 프로그램을 만듭니다.
+`.github/workflows/release.yml`이 패키지와 설치 프로그램을 만듭니다. 패키지는 프로세서별 앱을 묶은 zip이고(`x64-vulkan`, `arm64-cpu`), 설치 프로그램은 그중 PC에 맞는 것을 릴리즈에서 내려받아 설치합니다.
 
 1. `CMakeLists.txt`의 `project(... VERSION x.y.z)`를 올리고 `dev`를 `main`에 merge합니다.
 2. `main`에 `v<버전>` 태그를 올립니다. (`git tag v1.0.0` → `git push origin v1.0.0`) 태그와 프로젝트 버전이 다르면 빌드가 실패합니다.
-3. Actions가 Vulkan 빌드와 설치 프로그램을 만들어 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다.
+3. Actions가 패키지 zip 두 개와 설치 프로그램을 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다. 공개하기 전에는 설치 프로그램이 패키지를 내려받지 못합니다.
 
-태그 없이 Actions 탭에서 Release 워크플로를 직접 실행하면, 설치 프로그램만 만들어 실행 결과(Artifacts)에 올립니다.
+- 설치 프로그램에는 패키지의 SHA-256이 들어 있어, 릴리즈의 zip을 나중에 바꿔 올리면 설치가 거부됩니다. zip을 고치려면 설치 프로그램도 다시 만들어야 합니다.
+- 설치 프로그램이 고르는 규칙은 `installer/OverlayTrans.iss`의 `SelectPackage`에 있습니다.
 
-로컬에서 만들 때는 Vulkan 프리셋으로 빌드한 뒤 아래를 실행합니다. ([Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요)
+태그 없이 Actions 탭에서 Release 워크플로를 직접 실행하면, 만들기만 해서 실행 결과(Artifacts)에 올립니다.
+
+로컬에서 만들 때는 빌드한 뒤 아래를 실행합니다. ([Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요)
 
 ```bash
+# 패키지: build/installer/OverlayTrans-<버전>-<아키텍처>-<백엔드>.zip
 $ powershell -ExecutionPolicy Bypass -File installer/package.ps1
-$ "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.0.0 installer/OverlayTrans.iss
-# 결과: build/installer/OverlayTrans-Setup-1.0.0.exe
+$ powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/arm64 -Arch arm64 -Backend cpu
+
+# 설치 프로그램: build/installer/OverlayTrans-Setup-<버전>.exe (위에서 만든 패키지만 지원)
+$ powershell -ExecutionPolicy Bypass -File installer/make-installer.ps1
+
+# 릴리즈에 올리기 전에 시험할 때는 내려받는 대신 로컬 패키지를 지정
+$ build/installer/OverlayTrans-Setup-1.2.0.exe /PACKAGE=C:\path\OverlayTrans-1.2.0-arm64-cpu.zip
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)

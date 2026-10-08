@@ -1,15 +1,17 @@
-﻿# 설치 프로그램에 넣을 파일을 한 폴더에 모은다. 빌드를 마친 뒤 저장소 루트에서 실행한다.
+﻿# 설치할 파일을 한 폴더에 모으고 zip 하나로 묶는다. 빌드를 마친 뒤 저장소 루트에서 실행한다.
 #
 #   powershell -ExecutionPolicy Bypass -File installer/package.ps1
-#   powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/cl -Arch arm64
+#   powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/arm64 -Arch arm64 -Backend cpu
 #
-# 모은 폴더(build/package)는 installer/OverlayTrans.iss가 설치 프로그램으로 묶는다.
+# 결과는 build/installer/OverlayTrans-<버전>-<아키텍처>-<백엔드>.zip 이다. 설치 프로그램에는 넣지 않고 릴리즈에
+# 따로 올린다. 설치 프로그램(installer/OverlayTrans.iss)이 PC에 맞는 것을 골라 내려받는다.
 # 마지막 줄로 프로젝트 버전을 출력한다.
 param(
     [string]$BuildDir = "build/vk",
-    [string]$OutDir = "build/package",
     [ValidateSet("x64", "arm64")]
-    [string]$Arch = "x64"
+    [string]$Arch = "x64",
+    [ValidateSet("vulkan", "cpu", "opencl")]
+    [string]$Backend = "vulkan"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +26,7 @@ if (-not $exe) {
     throw "Build output not found under: $BuildDir/windows"
 }
 
-$out = Join-Path $root $OutDir
+$out = Join-Path $root "build/package/$Arch-$Backend"
 if (Test-Path $out) {
     Remove-Item -Recurse -Force $out
 }
@@ -42,7 +44,9 @@ if ($hasOpenCl) {
     Copy-Item $openclDll $out
 }
 Copy-Item (Join-Path $PSScriptRoot "OverlayTrans.ps1") $out
-Copy-Item (Join-Path $PSScriptRoot "options.txt") $out
+# 기본 옵션은 아키텍처마다 다르다. (ARM64는 GPU 옵션이 없고 음성 인식 모델이 작다.)
+$options = if ($Arch -eq "arm64") { "options-arm64.txt" } else { "options.txt" }
+Copy-Item (Join-Path $PSScriptRoot $options) (Join-Path $out "options.txt")
 Copy-Item -Recurse (Join-Path $root "extension") (Join-Path $out "extension")
 
 # Visual C++ 런타임을 실행 파일 옆에 둔다. 따로 설치하지 않아도(관리자 권한 없이) 실행되게 하기 위해서다.
@@ -93,5 +97,13 @@ if ($cmake -notmatch 'project\(OverlayTrans VERSION (\d+\.\d+\.\d+)') {
 }
 $version = $Matches[1]
 
-Write-Host "Packaged OverLay-Trans $version into $out"
+$zipFolder = Join-Path $root "build/installer"
+New-Item -ItemType Directory -Force $zipFolder | Out-Null
+$zip = Join-Path $zipFolder "OverlayTrans-$version-$Arch-$Backend.zip"
+if (Test-Path $zip) {
+    Remove-Item -Force $zip
+}
+Compress-Archive -Path (Join-Path $out "*") -DestinationPath $zip
+
+Write-Host "Packaged OverLay-Trans $version into $zip"
 Write-Output $version
