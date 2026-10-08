@@ -31,7 +31,14 @@ constexpr std::string_view KNOWN_HALLUCINATIONS[] = {
 };
 
 int default_thread_count() {
-    return static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_THREADS));
+    const unsigned int cores = std::thread::hardware_concurrency();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    // ARM 프로세서는 코어 하나에 스레드가 하나라 절반으로 줄일 이유가 없다. 다만 전부 쓰면 오히려 느려져 두 개를 남긴다.
+    // (스냅드래곤 X 8코어에서 같은 음성을 처리한 시간: 4개 59초, 6개 51초, 8개 105초)
+    return static_cast<int>(std::clamp(cores > 2 ? cores - 2 : 1u, 1u, MAX_THREADS));
+#else
+    return static_cast<int>(std::clamp(cores / 2, 1u, MAX_THREADS));
+#endif
 }
 
 // 비교를 위해 공백과 문장 부호(ASCII 부호, 、 。)를 뺀 문자열을 만든다.
@@ -79,6 +86,20 @@ int find_whisper_gpu_index(int wanted) {
     return 0;
 }
 
+// GPU가 OpenCL 백엔드(스냅드래곤 X의 Adreno GPU)로 잡혀 있는지 확인한다.
+// whisper.cpp는 이 백엔드에 모델을 올리다가 비정상 종료하므로, 이때는 음성 인식을 CPU로 돌린다.
+bool gpu_is_opencl() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        const ggml_backend_dev_t device = ggml_backend_dev_get(i);
+        const auto type = ggml_backend_dev_type(device);
+        if ((type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) &&
+            std::string_view(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))) == "OpenCL") {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 struct SpeechRecognizer::Impl {
@@ -98,7 +119,7 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
     quiet_whisper_log();
 
     whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = config.use_gpu;
+    params.use_gpu = config.use_gpu && !gpu_is_opencl();
     params.gpu_device = find_whisper_gpu_index(config.gpu_device);
     impl_->context = whisper_init_from_file_with_params(model_path.string().c_str(), params);
     if (impl_->context == nullptr) {

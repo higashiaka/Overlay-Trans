@@ -27,3 +27,10 @@ target_link_libraries(OverlayTransWin PRIVATE
 add_custom_command(TARGET OverlayTransWin POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OVERLAY_SHERPA_ONNX_DLLS} $<TARGET_FILE_DIR:OverlayTransWin>
 )
+
+# OpenCL 로더를 실행 파일 옆에 복사한다. (OpenCL 프리셋으로 빌드한 경우)
+if(OVERLAY_OPENCL_DLL)
+    add_custom_command(TARGET OverlayTransWin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OVERLAY_OPENCL_DLL} $<TARGET_FILE_DIR:OverlayTransWin>
+    )
+endif()
