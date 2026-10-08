@@ -79,6 +79,20 @@ int find_whisper_gpu_index(int wanted) {
     return 0;
 }
 
+// GPU가 OpenCL 백엔드(스냅드래곤 X의 Adreno GPU)로 잡혀 있는지 확인한다.
+// whisper.cpp는 이 백엔드에 모델을 올리다가 비정상 종료하므로, 이때는 음성 인식을 CPU로 돌린다.
+bool gpu_is_opencl() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        const ggml_backend_dev_t device = ggml_backend_dev_get(i);
+        const auto type = ggml_backend_dev_type(device);
+        if ((type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) &&
+            std::string_view(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))) == "OpenCL") {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 struct SpeechRecognizer::Impl {
@@ -98,7 +112,7 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
     quiet_whisper_log();
 
     whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = config.use_gpu;
+    params.use_gpu = config.use_gpu && !gpu_is_opencl();
     params.gpu_device = find_whisper_gpu_index(config.gpu_device);
     impl_->context = whisper_init_from_file_with_params(model_path.string().c_str(), params);
     if (impl_->context == nullptr) {

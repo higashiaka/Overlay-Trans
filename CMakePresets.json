@@ -17,6 +17,31 @@
       "cacheVariables": {
         "GGML_VULKAN": "ON"
       }
+    },
+    {
+      "name": "windows-arm64",
+      "displayName": "Windows ARM64 (CPU)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/arm64",
+      "toolchainFile": "${sourceDir}/third_party/llama.cpp/cmake/arm64-windows-llvm.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS": "-march=armv8.7-a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments",
+        "CMAKE_CXX_FLAGS": "-march=armv8.7-a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments",
+        "OVERLAY_TARGET_ARCH": "arm64"
+      }
+    },
+    {
+      "name": "windows-arm64-opencl",
+      "displayName": "Windows ARM64 (OpenCL GPU)",
+      "inherits": "windows-arm64",
+      "binaryDir": "${sourceDir}/build/cl",
+      "cacheVariables": {
+        "GGML_OPENCL": "ON"
+      },
+      "environment": {
+        "PYTHONUTF8": "1"
+      }
     }
   ],
   "buildPresets": [
@@ -29,6 +54,14 @@
       "name": "windows-x64-vulkan",
       "configurePreset": "windows-x64-vulkan",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-arm64",
+      "configurePreset": "windows-arm64"
+    },
+    {
+      "name": "windows-arm64-opencl",
+      "configurePreset": "windows-arm64-opencl"
     }
   ]
 }

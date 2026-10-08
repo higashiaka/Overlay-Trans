@@ -324,6 +324,38 @@ STT를 large-v3-turbo로 두고, 다른 프로그램이 VRAM을 약 3.5GB 쓰는
 | Qwen 3.5 4B | 12 | 약 0.74초 |
 | Qwen 3.5 2B | 전부 | 약 0.13초 |
 
+### Windows ARM64 빌드 (스냅드래곤 X)
+
+스냅드래곤 X PC에서 직접 빌드합니다. Visual Studio 2022(또는 Build Tools)의 ARM64 C++ 도구, Clang, Python이 필요합니다. (`winget install LLVM.LLVM`) Visual Studio의 컴파일러(cl)로는 빌드되지 않습니다.
+
+`cmake`, `ninja`, `clang`을 PATH에서 찾을 수 있어야 합니다. CMake와 Ninja는 Visual Studio에 들어 있는 것을 써도 됩니다.
+
+```bash
+# CPU만 사용
+$ cmake --preset windows-arm64
+$ cmake --build --preset windows-arm64
+
+# 번역을 Adreno GPU(OpenCL)로 처리. OpenCL 헤더와 로더는 빌드할 때 내려받음
+$ cmake --preset windows-arm64-opencl
+$ cmake --build --preset windows-arm64-opencl
+
+$ ./build/cl/windows/OverlayTransWin.exe --language ja
+```
+
+- OpenCL 빌드에서도 음성 인식은 CPU로 처리합니다. whisper.cpp가 OpenCL 백엔드에 모델을 올리지 못하기 때문입니다.
+- 스냅드래곤 X(ARMv8.7) 전용으로 빌드되므로 그보다 오래된 ARM 프로세서에서는 실행되지 않습니다.
+- 기본 STT 모델(large-v3-turbo)은 CPU에서 발화 하나에 7초 이상 걸립니다. `--stt-model`로 base 같은 작은 모델을 지정하세요.
+
+#### 측정 결과 (Snapdragon X X1-26-100 / Adreno X1-45, 영어 샘플 파일)
+
+| 구성 | STT | 번역 (Gemma 3 4B) |
+| --- | --- | --- |
+| STT large-v3-turbo-q5_0, CPU | 약 7~12초 | - |
+| STT base, 번역 CPU | 약 0.3~0.5초 | 약 1~2.5초 |
+| STT base, 번역 Adreno GPU | 약 0.3~0.5초 | 약 1.4~2.8초 |
+
+앞 문장에 합쳐 다시 번역하는 경우는 4~8초까지 걸렸습니다. 이 GPU에서는 번역을 GPU에 올려도 CPU보다 빨라지지 않았습니다.
+
 ### 릴리즈 만들기
 
 `.github/workflows/release.yml`이 Windows 설치 프로그램을 만듭니다.

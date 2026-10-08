@@ -62,7 +62,7 @@ struct Options {
     bool voice_match = true;  // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지
     bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
-    bool use_gpu = true;  // Vulkan 프리셋으로 빌드한 경우에만 효과가 있다.
+    bool use_gpu = true;  // GPU 프리셋(Vulkan, OpenCL)으로 빌드한 경우에만 효과가 있다.
     int gpu_device = 0;
     int port = 47815;  // 확장 프로그램과 통신하는 로컬 포트
     int llm_gpu_layers = -1;  // 번역 모델에서 GPU에 올릴 층 수. -1이면 전부.
