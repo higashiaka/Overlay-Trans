@@ -141,11 +141,19 @@ struct Translator::Impl {
     std::vector<Line> history;         // 모델의 메모리에 들어 있는 이전 문장들
     size_t formatted_history_size = 0;  // history까지를 대화 형식으로 만든 문자열의 길이
 
-    // history 뒤에 current_message를 붙인 대화를 모델의 형식으로 만든다.
+    // 지시문과 예시까지를 대화 형식으로 만든 문자열과 그 토큰. 모델의 메모리 맨 앞에 미리 넣어 두고,
+    // 이전 문장들을 버릴 때도 이 부분은 남긴다. 다시 계산하는 데 문장 하나를 번역하는 것보다 오래 걸린다.
+    // 미리 넣어 둘 수 없으면 비어 있다.
+    std::string prefix;
+    std::vector<llama_token> prefix_tokens;
+
+    // history(include_history가 false면 생략) 뒤에 current_message를 붙인 대화를 모델의 형식으로 만든다.
     // add_reply_start가 true면 모델이 답을 시작할 위치까지 포함한다.
-    std::string format_chat(const std::string* current_message, bool add_reply_start) const;
+    std::string format_chat(const std::string* current_message, bool add_reply_start,
+                            bool include_history = true) const;
     std::vector<llama_token> tokenize(const std::string& text, bool is_first) const;
     bool fits_in_context(size_t new_token_count) const;
+    void load_prefix();
     void forget_old_lines();
     void remove_last_line();
     std::string generate();
@@ -153,7 +161,8 @@ struct Translator::Impl {
     std::string run(const std::string& message, llama_pos& memory_start, size_t& formatted_start);
 };
 
-std::string Translator::Impl::format_chat(const std::string* current_message, bool add_reply_start) const {
+std::string Translator::Impl::format_chat(const std::string* current_message, bool add_reply_start,
+                                          bool include_history) const {
     std::vector<llama_chat_message> messages;
     messages.push_back({"system", system_prompt.c_str()});
     // 첫 문장부터 "받은 말을 번역만 한다"는 형식이 잡혀 있도록 예시를 먼저 보여 준다.
@@ -164,9 +173,11 @@ std::string Translator::Impl::format_chat(const std::string* current_message, bo
             messages.push_back({"assistant", example.translation});
         }
     }
-    for (const Line& line : history) {
-        messages.push_back({"user", line.message.c_str()});
-        messages.push_back({"assistant", line.translation.c_str()});
+    if (include_history) {
+        for (const Line& line : history) {
+            messages.push_back({"user", line.message.c_str()});
+            messages.push_back({"assistant", line.translation.c_str()});
+        }
     }
     if (current_message != nullptr) {
         messages.push_back({"user", current_message->c_str()});
@@ -204,6 +215,44 @@ bool Translator::Impl::fits_in_context(size_t new_token_count) const {
     return used + new_token_count + static_cast<size_t>(config.max_output_tokens) <= llama_n_ctx(context);
 }
 
+// 지시문과 예시를 모델의 메모리 맨 앞에 넣고, 그 뒤에 있던 것은 지운다.
+// 이미 들어 있는 것과 앞부분이 같으면(방송 정보만 바뀐 경우 등) 달라진 뒤쪽만 다시 계산한다.
+void Translator::Impl::load_prefix() {
+    llama_memory_t memory = llama_get_memory(context);
+    std::string formatted = format_chat(nullptr, false, false);
+
+    // 대화 형식에 따라서는 첫 문장이 붙으면 앞부분의 모양이 달라진다. (지시문을 첫 문장과 합치는 형식에서 예시가 없을 때)
+    // 그런 형식에서는 미리 넣어 둘 수 없다.
+    const std::string probe = "x";
+    if (format_chat(&probe, false, false).compare(0, formatted.size(), formatted) != 0) {
+        llama_memory_clear(memory, true);
+        prefix.clear();
+        prefix_tokens.clear();
+        return;
+    }
+
+    std::vector<llama_token> tokens = tokenize(formatted, true);
+    size_t same = 0;
+    while (same < tokens.size() && same < prefix_tokens.size() && tokens[same] == prefix_tokens[same]) {
+        ++same;
+    }
+    if (same == 0 || !llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(same), -1)) {
+        llama_memory_clear(memory, true);
+        same = 0;
+    }
+
+    prefix.clear();
+    prefix_tokens.clear();
+    if (same < tokens.size() &&
+        llama_decode(context, llama_batch_get_one(tokens.data() + same, static_cast<int32_t>(tokens.size() - same))) !=
+            0) {
+        llama_memory_clear(memory, true);
+        return;
+    }
+    prefix = std::move(formatted);
+    prefix_tokens = std::move(tokens);
+}
+
 void Translator::Impl::forget_old_lines() {
     if (history.size() > config.context_lines) {
         history.erase(history.begin(), history.end() - static_cast<std::ptrdiff_t>(config.context_lines));
@@ -213,8 +262,9 @@ void Translator::Impl::forget_old_lines() {
         line.message = line.source;
         line.memory_start = -1;
     }
-    llama_memory_clear(llama_get_memory(context), true);
-    formatted_history_size = 0;
+    // 지시문과 예시만 남긴다. 남겨 둔 문장들은 다음 문장을 번역할 때 함께 다시 넣는다.
+    load_prefix();
+    formatted_history_size = prefix.size();
 }
 
 void Translator::Impl::remove_last_line() {
@@ -357,6 +407,8 @@ bool Translator::init(const std::filesystem::path& model_path, const TranslatorC
 
     impl_->config = config;
     impl_->system_prompt = build_system_prompt(config, {});
+    // 첫 문장을 번역할 때 기다리지 않도록 지시문과 예시를 지금 넣어 둔다.
+    impl_->forget_old_lines();
     return true;
 }
 
@@ -365,7 +417,7 @@ void Translator::set_stream_info(const std::string& info) {
     if (system_prompt == impl_->system_prompt) {
         return;
     }
-    // 지시문이 바뀌면 모델의 메모리를 처음부터 다시 채워야 한다. 최근 문장들은 맥락으로 남긴다.
+    // 지시문이 바뀌면 모델의 메모리에서 달라진 부분부터 다시 채워야 한다. 최근 문장들은 맥락으로 남긴다.
     impl_->system_prompt = system_prompt;
     impl_->forget_old_lines();
 }
@@ -419,18 +471,20 @@ std::string Translator::translate(std::string_view text, std::span<const std::st
 // 모델의 메모리에 message를 이어 넣고 번역을 생성한다.
 std::string Translator::Impl::run(const std::string& message, llama_pos& memory_start, size_t& formatted_start) {
     // 이전 문장들은 이미 모델의 메모리에 있으므로, 새로 늘어난 부분만 이어서 넣는다.
-    std::string formatted = format_chat(&message, true);
-    std::vector<llama_token> tokens = tokenize(formatted.substr(formatted_history_size), formatted_history_size == 0);
-    // 메모리가 비어 있으면 지시문부터 한꺼번에 넣으므로 이 문장만의 시작 위치를 알 수 없다.
-    formatted_start = formatted_history_size;
-    memory_start = formatted_history_size == 0 ? -1 : llama_memory_seq_pos_max(llama_get_memory(context), 0) + 1;
+    std::vector<llama_token> tokens;
+    const auto prepare = [&] {
+        const std::string formatted = format_chat(&message, true);
+        tokens = tokenize(formatted.substr(formatted_history_size), formatted_history_size == 0);
+        // 메모리가 비어 있으면 지시문부터 한꺼번에 넣으므로 이 문장만의 시작 위치를 알 수 없다.
+        formatted_start = formatted_history_size;
+        memory_start = formatted_history_size == 0 ? -1 : llama_memory_seq_pos_max(llama_get_memory(context), 0) + 1;
+    };
+    prepare();
 
     // 메모리가 차면 오래된 문장을 버리고 최근 문장들만으로 다시 시작한다.
     if (!fits_in_context(tokens.size())) {
         forget_old_lines();
-        formatted = format_chat(&message, true);
-        tokens = tokenize(formatted, true);
-        memory_start = -1;
+        prepare();
     }
     if (tokens.empty()) {
         return {};
