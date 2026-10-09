@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdio>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -18,8 +20,14 @@ namespace {
 // 스레드를 물리 코어 수 이상으로 늘려도 whisper.cpp는 빨라지지 않는다.
 constexpr unsigned int MAX_THREADS = 8;
 
+constexpr double SAMPLE_RATE = 16000.0;
 // whisper 인코더 출력 한 칸에 해당하는 샘플 수(16kHz에서 20ms).
 constexpr size_t SAMPLES_PER_AUDIO_CONTEXT = 320;
+
+// 발화 하나에서 나올 수 있다고 보는 토큰 수의 한도. 실제 방송 음성에서 정상적으로 인식된 발화는
+// 1초에 많아야 8토큰이었고, 이 한도의 40%를 넘지 않았다.
+constexpr int MAX_TOKENS_BASE = 16;
+constexpr double MAX_TOKENS_PER_SECOND = 10.0;
 
 // 문장 부호를 뺀 형태로 적는다. (remove_punctuation의 결과와 비교한다.)
 constexpr std::string_view KNOWN_HALLUCINATIONS[] = {
@@ -147,19 +155,51 @@ std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::st
         params.audio_ctx = std::min(std::max(impl_->config.audio_context, needed),
                                     whisper_model_n_audio_ctx(impl_->context));
     }
+    struct AbortState {
+        std::stop_token stop;
+        std::chrono::steady_clock::time_point deadline;
+        int max_tokens;
+        bool timed_out = false;
+        bool repeating = false;
+    };
+    const uint32_t time_limit_ms = impl_->config.time_limit_ms;
+    const double seconds = static_cast<double>(samples.size()) / SAMPLE_RATE;
+    AbortState abort_state{stop,
+                           time_limit_ms > 0
+                               ? std::chrono::steady_clock::now() + std::chrono::milliseconds(time_limit_ms)
+                               : std::chrono::steady_clock::time_point::max(),
+                           MAX_TOKENS_BASE + static_cast<int>(MAX_TOKENS_PER_SECOND * seconds)};
+    // 말소리가 뚜렷하지 않은 구간에서는 whisper가 같은 글자를 한도(220토큰)까지 되풀이하고, 결과가 이상하다고 보고
+    // 설정을 바꿔 여러 번 다시 시도한다. 1초 남짓한 구간에 10초 넘게 걸리는 일이 있었다.
+    // 발화 길이에 비해 토큰이 지나치게 많아지면 되풀이하는 것으로 보고 그 구간의 인식을 그만둔다.
+    params.logits_filter_callback = [](whisper_context*, whisper_state*, const whisper_token_data*, int token_count,
+                                       float*, void* data) {
+        auto* state = static_cast<AbortState*>(data);
+        if (token_count >= state->max_tokens) {
+            state->repeating = true;
+        }
+    };
+    params.logits_filter_callback_user_data = &abort_state;
     params.abort_callback = [](void* data) {
-        const bool stop_requested = static_cast<std::stop_token*>(data)->stop_requested();
-        if (stop_requested) {
-            // 요청받은 중단은 오류가 아니다. whisper.cpp가 중단하면서 남기는 실패 로그를 숨긴다.
+        auto* state = static_cast<AbortState*>(data);
+        if (std::chrono::steady_clock::now() >= state->deadline) {
+            state->timed_out = true;
+        }
+        const bool aborted = state->timed_out || state->repeating || state->stop.stop_requested();
+        if (aborted) {
+            // 요청받은 중단, 시간 초과, 되풀이는 오류가 아니다. whisper.cpp가 중단하면서 남기는 실패 로그를 숨긴다.
             mute_whisper_log_on_this_thread(true);
         }
-        return stop_requested;
+        return aborted;
     };
-    params.abort_callback_user_data = &stop;
+    params.abort_callback_user_data = &abort_state;
 
     const int result = whisper_full(impl_->context, params, samples.data(), static_cast<int>(samples.size()));
     mute_whisper_log_on_this_thread(false);
-    if (result != 0 || stop.stop_requested()) {
+    if (abort_state.timed_out && !stop.stop_requested()) {
+        std::fprintf(stderr, "Speech recognition took longer than %u ms and was stopped.\n", time_limit_ms);
+    }
+    if (result != 0 || abort_state.timed_out || abort_state.repeating || stop.stop_requested()) {
         return {};
     }
 
