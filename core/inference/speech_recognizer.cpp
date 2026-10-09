@@ -39,14 +39,10 @@ constexpr std::string_view KNOWN_HALLUCINATIONS[] = {
 };
 
 int default_thread_count() {
-    const unsigned int cores = std::thread::hardware_concurrency();
-#if defined(_M_ARM64) || defined(__aarch64__)
-    // ARM 프로세서는 코어 하나에 스레드가 하나라 절반으로 줄일 이유가 없다. 다만 전부 쓰면 오히려 느려져 두 개를 남긴다.
-    // (스냅드래곤 X 8코어에서 같은 음성을 처리한 시간: 4개 59초, 6개 51초, 8개 105초)
-    return static_cast<int>(std::clamp(cores > 2 ? cores - 2 : 1u, 1u, MAX_THREADS));
-#else
-    return static_cast<int>(std::clamp(cores / 2, 1u, MAX_THREADS));
-#endif
+    // 코어의 절반만 쓴다. 하이퍼스레딩이 없는 ARM 프로세서에서도 마찬가지다. 방송을 보는 중에는 브라우저와
+    // 발화 검출이 코어를 함께 쓰는데, 스레드가 코어를 다 차지하면 서로 기다리느라 계산이 몇 초씩 멈춘다.
+    // (스냅드래곤 X 8코어, 방송 2분: 6개일 때 인식 20번 중 5번이 4~10초, 4개일 때 34번 모두 1초 이내)
+    return static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_THREADS));
 }
 
 // 비교를 위해 공백과 문장 부호(ASCII 부호, 、 。)를 뺀 문자열을 만든다.
