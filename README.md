@@ -357,12 +357,29 @@ $ ./build/cl/windows/OverlayTransWin.exe --language ja
 
 ```bash
 $ curl -L -o core/models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
-$ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/models/ggml-small.bin
+$ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/models/ggml-small.bin --stt-audio-ctx 384
 ```
 
-#### 측정 결과 (Snapdragon X X1-26-100 8코어 / Adreno X1-45, 전원 연결)
+- `--stt-audio-ctx 384`를 함께 쓰면 인식 시간이 절반으로 줄어듭니다. 대신 짧은 감탄사나 말이 아닌 소리를 놓치는 일이 조금 늘어납니다.
+- 스레드는 코어의 절반(8코어면 4개)만 씁니다. 파일을 처리할 때는 6개가 15%쯤 빠르지만, 방송을 보는 중에는 5개 이상에서 인식이 4~10초씩 멈추는 일이 30초에 한 번꼴로 생겼습니다.
+- 번역 모델을 ARM에 맞게 다시 배열한 사본(`GGML_CPU_REPACK`)은 만들지 않습니다. 만들면 번역이 20~25% 빨라지지만 메모리를 2.4GB 더 써서(앱 전체 4.6GB), 16GB PC에서 브라우저와 함께 돌리면 메모리가 바닥나 몇 초씩 멈춥니다.
 
-일본어 문장 8개를 이은 98초 분량의 파일을 처리한 결과입니다. 번역 시간은 앞 문장에 합치지 않은 새 문장 기준입니다.
+#### 방송을 보면서 잰 결과 (Snapdragon X X1-26-100 8코어, STT small, `--stt-audio-ctx 384`, 번역 Gemma 3 4B)
+
+트위치 잡담 방송을 2분 30초씩 세 번 본 결과입니다. (발화 117개)
+
+| 항목 | 중앙값 | 최대 |
+| --- | --- | --- |
+| 음성 인식 | 0.8~1.0초 | 2.3초 |
+| 번역 | 1.6~1.9초 | 5.6초 |
+| 말이 끝난 뒤 첫 자막까지 | 2.7~3.9초 | - |
+| 말이 끝난 뒤 번역 완성까지 | 3.3~4.7초 | - |
+
+앱은 메모리를 약 2.2GB 씁니다.
+
+#### 파일로 잰 결과 (Snapdragon X X1-26-100 8코어 / Adreno X1-45, 전원 연결)
+
+일본어 문장 8개를 이은 98초 분량의 파일을 처리한 결과입니다. 번역 시간은 앞 문장에 합치지 않은 새 문장 기준입니다. 스레드 6개, 번역 모델 사본을 만드는 설정으로 잰 값이라 지금의 기본 설정보다 조금 빠르게 나와 있습니다.
 
 발화 구간 하나당 STT 처리 시간 (CPU):
 
@@ -382,9 +399,6 @@ $ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/model
 | Qwen 3.5 2B | Adreno GPU | 약 1.1초 | 위와 같음 |
 
 - 이 GPU에서는 번역을 GPU에 올려도 CPU보다 느리고, 음성 인식도 0.4초에서 1.1초로 느려집니다. CPU 빌드(`windows-arm64`)에 STT small, 번역 Gemma 3 4B 조합을 권합니다.
-- 앞 문장에 합쳐 다시 번역하면 평균 3.5~4초가 걸립니다. 특히 시작한 뒤 첫 문장에 합치는 경우에는 지시문 전체(약 350토큰)를 다시 계산해 4~6초가 걸립니다.
-- 스레드는 코어 수에서 두 개를 뺀 만큼 씁니다. 8코어에서 같은 파일을 처리한 시간은 4개 59초, 6개 51초, 8개 105초였습니다.
-
 ### 릴리즈 만들기
 
 `.github/workflows/release.yml`이 패키지와 설치 프로그램을 만듭니다. 패키지는 프로세서별 앱을 묶은 zip이고(`x64-vulkan`, `arm64-cpu`), 설치 프로그램은 그중 PC에 맞는 것을 릴리즈에서 내려받아 설치합니다.

@@ -232,6 +232,12 @@ constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
 // 길게 합칠수록 다시 번역하는 시간이 늘어난다.
 constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
 constexpr size_t MAX_SENTENCE_BYTES = 180;
+// 말이 끝난 뒤 번역을 시작하기까지 이보다 오래 걸렸으면 처리가 밀려 있는 것이다. 이때는 합치지 않는다.
+// 같은 말을 다시 번역하는 동안 뒤의 발화가 더 늦어진다.
+constexpr auto MAX_MERGE_LATENESS = std::chrono::seconds(3);
+
+// 방송을 보는 중에 인식 하나에 쓸 수 있는 최대 시간(ms). 이보다 오래 걸린 자막은 이미 늦었고, 뒤의 발화까지 밀리게 한다.
+constexpr uint32_t LIVE_STT_TIME_LIMIT_MS = 4000;
 
 double to_seconds(Clock::duration duration) {
     return std::chrono::duration<double>(duration).count();
@@ -396,6 +402,8 @@ int wmain(int argc, wchar_t** argv) {
         .use_gpu = options.use_gpu,
         .gpu_device = options.gpu_device,
         .audio_context = options.stt_audio_context,
+        // 파일은 실제 속도와 상관없이 처리하므로 제한하지 않는다.
+        .time_limit_ms = options.input_file.empty() ? LIVE_STT_TIME_LIMIT_MS : 0,
     };
     if (!recognizer.init(options.stt_model, stt_config)) {
         std::fprintf(stderr, "Failed to load STT model: %s\n", to_utf8(options.stt_model).c_str());
@@ -520,7 +528,8 @@ int wmain(int argc, wchar_t** argv) {
         // 앞 구간에서 이어진 말이면 앞 구간과 합쳐서 다시 번역한다. 인식에 실패한 구간은 건너뛴다.
         // 감탄사나 웃음소리만 있는 구간은 앞 문장에 합치지 않고 따로 번역한다. 합쳐서 다시 번역하면 맞던 번역이
         // 바뀌는 일이 있었다. (体力上がるやすごー + ん -> "체력이 오르길 막막해") 뒤에 이어지는 말은 감탄사에 합칠 수 있다.
-        const bool continues = options.merge_sentences && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
+        const bool is_behind = is_live && translation_started_at - speech.speech_ended_at > MAX_MERGE_LATENESS;
+        const bool continues = options.merge_sentences && !is_behind && speech.silence_before_ms < MAX_SENTENCE_GAP_MS &&
                                !text.empty() && !is_japanese_interjection(text) && sentence.fragment_count > 0 &&
                                sentence.fragment_count < MAX_SENTENCE_FRAGMENTS &&
                                sentence.source.size() + text.size() <= MAX_SENTENCE_BYTES;

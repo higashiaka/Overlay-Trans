@@ -28,7 +28,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_FLAGS": "-march=armv8.7-a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments",
         "CMAKE_CXX_FLAGS": "-march=armv8.7-a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments",
-        "OVERLAY_TARGET_ARCH": "arm64"
+        "OVERLAY_TARGET_ARCH": "arm64",
+        "GGML_CPU_REPACK": "OFF"
       }
     },
     {
