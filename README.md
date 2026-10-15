@@ -187,15 +187,24 @@ $ git config commit.template .gitmessage
 
 ## 8. 빌드 및 실행 방식
 
-### 설치 프로그램으로 설치 (Windows x64)
+### 설치 프로그램으로 설치 (Windows x64, ARM64)
 
-1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
+1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 설치 프로그램이 PC의 프로세서를 확인해 맞는 앱을 내려받으므로 인터넷 연결이 필요합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
 2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
 3. 준비가 끝나면 창이 숨겨지고 알림 영역(시계 옆)에 아이콘이 생깁니다. 아이콘을 오른쪽 클릭해 "페어링 코드 복사"를 누른 뒤, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
 4. 아이콘 메뉴에서 로그 창을 보거나 앱을 종료할 수 있습니다.
 
-- Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
-- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`와 `--llm-gpu-layers 16`(VRAM 8GB 기준)이 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
+설치 프로그램이 고르는 앱은 프로세서에 따라 다릅니다.
+
+| 프로세서 | 받는 앱 | 음성 인식 | 번역 |
+| --- | --- | --- | --- |
+| x64 (AMD, Intel) | Vulkan 빌드 | large-v3-turbo, GPU | Gemma 3 4B, GPU |
+| ARM64 (스냅드래곤 X) | CPU 빌드 | small, CPU | Gemma 3 4B, CPU |
+
+- x64는 Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
+- 스냅드래곤 X는 GPU를 쓰지 않습니다. Adreno GPU로는 CPU보다 느렸습니다. ([측정 결과](#측정-결과-snapdragon-x-x1-26-100-8코어--adreno-x1-45-전원-연결))
+- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`가 들어 있고, x64에는 `--llm-gpu-layers 16`(VRAM 8GB 기준), ARM64에는 `--stt-model models\ggml-small.bin`이 더 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
+- 음성 인식 모델을 바꾸려면 `--stt-model models\ggml-base.bin`처럼 whisper.cpp 모델 이름을 적습니다. 없는 모델은 다음에 실행할 때 내려받습니다.
 - 제거는 Windows 설정의 "설치된 앱"에서 합니다. 내려받은 모델도 함께 지워집니다.
 
 ### 소스에서 빌드
@@ -324,22 +333,97 @@ STT를 large-v3-turbo로 두고, 다른 프로그램이 VRAM을 약 3.5GB 쓰는
 | Qwen 3.5 4B | 12 | 약 0.74초 |
 | Qwen 3.5 2B | 전부 | 약 0.13초 |
 
+### Windows ARM64 빌드 (스냅드래곤 X)
+
+스냅드래곤 X PC에서 직접 빌드합니다. Visual Studio 2022(또는 Build Tools)의 ARM64 C++ 도구, Clang, Python이 필요합니다. (`winget install LLVM.LLVM`) Visual Studio의 컴파일러(cl)로는 빌드되지 않습니다.
+
+`cmake`, `ninja`, `clang`을 PATH에서 찾을 수 있어야 합니다. CMake와 Ninja는 Visual Studio에 들어 있는 것을 써도 됩니다.
+
+```bash
+# CPU만 사용
+$ cmake --preset windows-arm64
+$ cmake --build --preset windows-arm64
+
+# 번역을 Adreno GPU(OpenCL)로 처리. OpenCL 헤더와 로더는 빌드할 때 내려받음
+$ cmake --preset windows-arm64-opencl
+$ cmake --build --preset windows-arm64-opencl
+
+$ ./build/cl/windows/OverlayTransWin.exe --language ja
+```
+
+- OpenCL 빌드에서도 음성 인식은 CPU로 처리합니다. whisper.cpp가 OpenCL 백엔드에 모델을 올리지 못하기 때문입니다.
+- 스냅드래곤 X(ARMv8.7) 전용으로 빌드되므로 그보다 오래된 ARM 프로세서에서는 실행되지 않습니다.
+- 기본 STT 모델(large-v3-turbo)은 CPU에서 발화 하나에 9초 가까이 걸려 쓸 수 없습니다. `--stt-model`로 small을 지정하세요.
+
+```bash
+$ curl -L -o core/models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+$ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/models/ggml-small.bin --stt-audio-ctx 384
+```
+
+- `--stt-audio-ctx 384`를 함께 쓰면 인식 시간이 절반으로 줄어듭니다. 대신 짧은 감탄사나 말이 아닌 소리를 놓치는 일이 조금 늘어납니다.
+- 스레드는 코어의 절반(8코어면 4개)만 씁니다. 파일을 처리할 때는 6개가 15%쯤 빠르지만, 방송을 보는 중에는 5개 이상에서 인식이 4~10초씩 멈추는 일이 30초에 한 번꼴로 생겼습니다.
+- 번역 모델을 ARM에 맞게 다시 배열한 사본(`GGML_CPU_REPACK`)은 만들지 않습니다. 만들면 번역이 20~25% 빨라지지만 메모리를 2.4GB 더 써서(앱 전체 4.6GB), 16GB PC에서 브라우저와 함께 돌리면 메모리가 바닥나 몇 초씩 멈춥니다.
+
+#### 방송을 보면서 잰 결과 (Snapdragon X X1-26-100 8코어, STT small, `--stt-audio-ctx 384`, 번역 Gemma 3 4B)
+
+트위치 잡담 방송을 2분 30초씩 세 번 본 결과입니다. (발화 117개)
+
+| 항목 | 중앙값 | 최대 |
+| --- | --- | --- |
+| 음성 인식 | 0.8~1.0초 | 2.3초 |
+| 번역 | 1.6~1.9초 | 5.6초 |
+| 말이 끝난 뒤 첫 자막까지 | 2.7~3.9초 | - |
+| 말이 끝난 뒤 번역 완성까지 | 3.3~4.7초 | - |
+
+앱은 메모리를 약 2.2GB 씁니다.
+
+#### 파일로 잰 결과 (Snapdragon X X1-26-100 8코어 / Adreno X1-45, 전원 연결)
+
+일본어 문장 8개를 이은 98초 분량의 파일을 처리한 결과입니다. 번역 시간은 앞 문장에 합치지 않은 새 문장 기준입니다. 스레드 6개, 번역 모델 사본을 만드는 설정으로 잰 값이라 지금의 기본 설정보다 조금 빠르게 나와 있습니다.
+
+발화 구간 하나당 STT 처리 시간 (CPU):
+
+| STT 모델 | 처리 시간 | 인식 품질 |
+| --- | --- | --- |
+| base | 약 0.4초 | 낱말을 자주 틀림 (凍結 → 統結, H2A → A12a) |
+| small | 약 1.4초 | 대체로 맞음 |
+| large-v3-turbo-q5_0 | 약 8.7초 | - |
+
+번역 시간:
+
+| 번역 모델 | 장치 | 번역 평균 | 번역 품질 |
+| --- | --- | --- | --- |
+| Gemma 3 4B | CPU | 약 1.4초 | 자연스러움 |
+| Gemma 3 4B | Adreno GPU | 약 2.5초 | 위와 같음 |
+| Qwen 3.5 2B | CPU | 약 0.8초 | 뜻이 자주 틀리고 따옴표와 "라고 말합니다"를 덧붙임 |
+| Qwen 3.5 2B | Adreno GPU | 약 1.1초 | 위와 같음 |
+
+- 이 GPU에서는 번역을 GPU에 올려도 CPU보다 느리고, 음성 인식도 0.4초에서 1.1초로 느려집니다. CPU 빌드(`windows-arm64`)에 STT small, 번역 Gemma 3 4B 조합을 권합니다.
 ### 릴리즈 만들기
 
-`.github/workflows/release.yml`이 Windows 설치 프로그램을 만듭니다.
+`.github/workflows/release.yml`이 패키지와 설치 프로그램을 만듭니다. 패키지는 프로세서별 앱을 묶은 zip이고(`x64-vulkan`, `arm64-cpu`), 설치 프로그램은 그중 PC에 맞는 것을 릴리즈에서 내려받아 설치합니다.
 
 1. `CMakeLists.txt`의 `project(... VERSION x.y.z)`를 올리고 `dev`를 `main`에 merge합니다.
 2. `main`에 `v<버전>` 태그를 올립니다. (`git tag v1.0.0` → `git push origin v1.0.0`) 태그와 프로젝트 버전이 다르면 빌드가 실패합니다.
-3. Actions가 Vulkan 빌드와 설치 프로그램을 만들어 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다.
+3. Actions가 패키지 zip 두 개와 설치 프로그램을 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다. 공개하기 전에는 설치 프로그램이 패키지를 내려받지 못합니다.
 
-태그 없이 Actions 탭에서 Release 워크플로를 직접 실행하면, 설치 프로그램만 만들어 실행 결과(Artifacts)에 올립니다.
+- 설치 프로그램에는 패키지의 SHA-256이 들어 있어, 릴리즈의 zip을 나중에 바꿔 올리면 설치가 거부됩니다. zip을 고치려면 설치 프로그램도 다시 만들어야 합니다.
+- 설치 프로그램이 고르는 규칙은 `installer/OverlayTrans.iss`의 `SelectPackage`에 있습니다.
 
-로컬에서 만들 때는 Vulkan 프리셋으로 빌드한 뒤 아래를 실행합니다. ([Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요)
+태그 없이 Actions 탭에서 Release 워크플로를 직접 실행하면, 만들기만 해서 실행 결과(Artifacts)에 올립니다.
+
+로컬에서 만들 때는 빌드한 뒤 아래를 실행합니다. ([Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요)
 
 ```bash
+# 패키지: build/installer/OverlayTrans-<버전>-<아키텍처>-<백엔드>.zip
 $ powershell -ExecutionPolicy Bypass -File installer/package.ps1
-$ "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" /DAppVersion=1.0.0 installer/OverlayTrans.iss
-# 결과: build/installer/OverlayTrans-Setup-1.0.0.exe
+$ powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/arm64 -Arch arm64 -Backend cpu
+
+# 설치 프로그램: build/installer/OverlayTrans-Setup-<버전>.exe (위에서 만든 패키지만 지원)
+$ powershell -ExecutionPolicy Bypass -File installer/make-installer.ps1
+
+# 릴리즈에 올리기 전에 시험할 때는 내려받는 대신 로컬 패키지를 지정
+$ build/installer/OverlayTrans-Setup-1.2.0.exe /PACKAGE=C:\path\OverlayTrans-1.2.0-arm64-cpu.zip
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)

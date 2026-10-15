@@ -6,16 +6,14 @@ $models = Join-Path $app "models"
 $exe = Join-Path $app "OverlayTransWin.exe"
 
 # 앱의 기본 모델. 파일 이름은 앱(windows/main.cpp)의 기본값과 같아야 한다.
+# 음성 인식 모델은 options.txt의 --stt-model에 따라 달라지므로 아래에서 따로 정한다.
+$defaultSttModel = "ggml-large-v3-turbo-q5_0.bin"
+$sttModelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 $modelFiles = @(
     @{
         Name = "ggml-silero-v6.2.0.bin"
         Url  = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
         Note = "음성 구간 감지 (1MB)"
-    },
-    @{
-        Name = "ggml-large-v3-turbo-q5_0.bin"
-        Url  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-        Note = "음성 인식 (0.6GB)"
     },
     @{
         Name = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
@@ -36,23 +34,6 @@ function Stop-WithMessage($message) {
     exit 1
 }
 
-New-Item -ItemType Directory -Force $models | Out-Null
-foreach ($model in $modelFiles) {
-    $target = Join-Path $models $model.Name
-    if (Test-Path $target) {
-        continue
-    }
-
-    # 다 받기 전에는 .part 파일에 쓴다. 중간에 끊겨도 다음 실행 때 이어서 받는다.
-    $partial = "$target.part"
-    Write-Host "모델을 내려받습니다: $($model.Note)"
-    & curl.exe --location --fail --retry 3 --continue-at - --output $partial $model.Url
-    if ($LASTEXITCODE -ne 0) {
-        Stop-WithMessage "모델을 내려받지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요."
-    }
-    Move-Item $partial $target
-}
-
 # options.txt: 한 줄에 옵션 하나. "--이름 값" 형식이며 값에 공백이 있어도 따옴표 없이 적는다.
 # 시작하면 이 창을 숨기고 알림 영역 아이콘으로 둔다. options.txt에 "--background off"를 적으면 창을 그대로 둔다.
 $arguments = @("--background", "on")
@@ -69,6 +50,43 @@ if (Test-Path $optionsFile) {
             $arguments += $value
         }
     }
+}
+
+# 음성 인식 모델. options.txt에 --stt-model이 있으면 그 파일을, 없으면 기본 모델을 쓴다.
+# whisper.cpp가 배포하는 모델(ggml-*.bin)이면 없을 때 내려받는다. 그 밖의 파일은 사용자가 직접 넣어 둔 것으로 본다.
+$sttPath = Join-Path $models $defaultSttModel
+$sttOption = [array]::IndexOf($arguments, "--stt-model")
+if ($sttOption -ge 0 -and $sttOption + 1 -lt $arguments.Count) {
+    $sttPath = $arguments[$sttOption + 1]
+    if (-not [System.IO.Path]::IsPathRooted($sttPath)) {
+        $sttPath = Join-Path $app $sttPath
+    }
+}
+$sttName = Split-Path -Leaf $sttPath
+if ($sttName -match '^ggml-[\w.-]+\.bin$') {
+    $modelFiles += @{
+        Name   = $sttName
+        Url    = "$sttModelUrl/$sttName"
+        Note   = "음성 인식 ($sttName)"
+        Target = $sttPath
+    }
+}
+
+New-Item -ItemType Directory -Force $models | Out-Null
+foreach ($model in $modelFiles) {
+    $target = if ($model.Target) { $model.Target } else { Join-Path $models $model.Name }
+    if (Test-Path $target) {
+        continue
+    }
+
+    # 다 받기 전에는 .part 파일에 쓴다. 중간에 끊겨도 다음 실행 때 이어서 받는다.
+    $partial = "$target.part"
+    Write-Host "모델을 내려받습니다: $($model.Note)"
+    & curl.exe --location --fail --retry 3 --continue-at - --output $partial $model.Url
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithMessage "모델을 내려받지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요."
+    }
+    Move-Item $partial $target
 }
 
 Write-Host "브라우저 확장 프로그램 폴더: $(Join-Path $app 'extension')"
