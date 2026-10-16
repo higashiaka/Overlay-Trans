@@ -66,7 +66,9 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
-    bool voice_match = true;  // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지
+    // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지. 혼자 하는 방송에서도 맞장구 뒤의 말이나 BGM이 바뀐 구간을
+    // 다른 사람으로 잘못 보고 합치기를 대부분 막아서(비교 8번 중 7번) 기본으로 끈다. 여러 사람이 하는 방송에서 켠다.
+    bool voice_match = false;
     bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // GPU 프리셋(Vulkan, OpenCL)으로 빌드한 경우에만 효과가 있다.
@@ -121,7 +123,7 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
         } else if (name == L"--voice-match") {
-            options.voice_match = value != L"off";
+            options.voice_match = value == L"on";
         } else if (name == L"--voice-model") {
             options.voice_model = value;
         } else if (name == L"--background") {
@@ -247,12 +249,14 @@ constexpr float SAME_VOICE_SIMILARITY = 0.5f;
 
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
-constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
+// 1초로 두면 같은 이야기를 잠깐 생각하며 이어 갈 때(1.0~1.5초) 따로 번역되는 일이 잦았다.
+constexpr uint32_t MAX_SENTENCE_GAP_MS = 1400;
 // 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
 // 길게 합칠수록 다시 번역하는 시간이 늘어나고, 자막 한 줄이 너무 길어져 읽기 어렵다.
 // 3구간, 180바이트(일본어 약 60자)까지 합치면 쉬지 않고 말하는 방송에서 자막이 두세 문장 길이가 되었고,
-// 번역 모델이 긴 문장의 뒷부분을 빠뜨리는 일도 있었다.
-constexpr size_t MAX_SENTENCE_FRAGMENTS = 2;
+// 번역 모델이 긴 문장의 뒷부분을 빠뜨리는 일도 있었다. 길이는 MAX_SENTENCE_BYTES로 막고, 구간 수는 넉넉히 둔다.
+// 2구간까지만 합치면 게임 방송처럼 짧게 끊어 말할 때 한 문장이 낱말 하나씩 따로 번역되었다.
+constexpr size_t MAX_SENTENCE_FRAGMENTS = 4;
 constexpr size_t MAX_SENTENCE_BYTES = 105;
 // 말이 끝난 뒤 번역을 시작하기까지 이보다 오래 걸렸으면 처리가 밀려 있는 것이다. 이때는 합치지 않는다.
 // 같은 말을 다시 번역하는 동안 뒤의 발화가 더 늦어진다.
@@ -652,6 +656,10 @@ int wmain(int argc, wchar_t** argv) {
                         static_cast<double>(config.sample_rate * config.channels),
                     to_ms(speech.recognition_time), speech.started_early ? " (early)" : "",
                     to_ms(finished_at - translation_started_at), chat.size());
+        // 앞 구간과의 사이에 빈 시간. 이어진 말인데 합쳐지지 않았을 때 원인을 찾는 데 쓴다.
+        if (speech.silence_before_ms != SpeechSegment::NO_PREVIOUS_SEGMENT) {
+            std::printf(" | gap %u ms", speech.silence_before_ms);
+        }
         if (merges) {
             std::printf(" | merged %zu", sentence.fragment_count);
         } else if (continues) {

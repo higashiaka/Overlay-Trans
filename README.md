@@ -258,8 +258,8 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 # 말이 잠깐 멈추면 발화가 끝났다고 확정되기 전에 인식을 미리 시작해 자막을 앞당김 (기본으로 켜짐). 끄려면 off
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-stt off
 
-# 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
-# 자막이 너무 길어지지 않도록 두 구간, 일본어 약 35자까지만 합침
+# 끊어서 내보낸 말이 1.4초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
+# 자막이 너무 길어지지 않도록 네 구간, 일본어 약 35자까지만 합침. 로그의 "gap"은 앞 구간과의 사이에 빈 시간
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
 
 # 번역문이 다 만들어지기 전에, 만들어진 부분부터 자막으로 보냄 (기본으로 켜짐). 끄려면 off
@@ -272,9 +272,10 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-au
 # 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둠 (설치본은 기본으로 켜짐). 아이콘 메뉴로 다시 볼 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --background on
 
-# 이어진 말을 합칠 때 앞뒤 목소리를 비교해, 다른 사람(게임 음성, 함께 방송하는 사람)의 말은 합치지 않음 (기본으로 켜짐)
-# 로그에 "voice 유사도"와 합치지 않은 경우 "other voice"가 표시됨. 끄려면 off
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --voice-match off
+# 이어진 말을 합칠 때 앞뒤 목소리를 비교해, 다른 사람(게임 음성, 함께 방송하는 사람)의 말은 합치지 않음 (기본으로 꺼짐)
+# 혼자 하는 방송에서는 같은 사람의 말도 다른 사람으로 잘못 보는 일이 많아 끔. 여러 사람이 하는 방송에서 on으로 켬
+# 로그에 "voice 유사도"와 합치지 않은 경우 "other voice"가 표시됨
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --voice-match on
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
