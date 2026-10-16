@@ -3,10 +3,14 @@
 #include "audio/wav_writer.h"
 #include "capture/audio_file_reader.h"
 #include "capture/loopback_capture.h"
+#include "inference/api_translator.h"
+#include "inference/deepl_translator.h"
+#include "inference/drafted_translator.h"
 #include "inference/recognition_worker.h"
 #include "inference/voice_matcher.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
+#include "net/winhttp_client.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
 #include "text/script.h"
@@ -17,6 +21,7 @@
 
 #include <shlobj.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -56,6 +62,10 @@ struct Options {
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
+    // 번역 방식. local(로컬 모델), api(Claude API, ANTHROPIC_API_KEY), deepl(DeepL API, DEEPL_API_KEY),
+    // hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
+    std::string translator = "local";
+    std::string api_model;  // 비어 있으면 ApiTranslatorConfig의 기본 모델을 쓴다.
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
@@ -125,6 +135,10 @@ Options parse_options(int argc, wchar_t** argv) {
             options.merge_sentences = value != L"off";
         } else if (name == L"--early-stt") {
             options.early_stt = value != L"off";
+        } else if (name == L"--translator") {
+            options.translator = to_utf8(value);
+        } else if (name == L"--api-model") {
+            options.api_model = to_utf8(value);
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -165,6 +179,17 @@ std::filesystem::path pairing_token_path() {
     }
     CoTaskMemFree(local_app_data);
     return folder / "OverlayTrans" / "pairing-token.txt";
+}
+
+// 환경 변수를 읽는다. 없으면 빈 문자열을 반환한다.
+std::string read_environment_variable(const char* name) {
+    const DWORD length = GetEnvironmentVariableA(name, nullptr, 0);
+    if (length == 0) {
+        return {};
+    }
+    std::string value(length, '\0');
+    value.resize(GetEnvironmentVariableA(name, value.data(), length));
+    return value;
 }
 
 // UTF-8 텍스트 파일 전체를 읽는다. 열 수 없으면 false를 반환한다.
@@ -229,9 +254,11 @@ constexpr float SAME_VOICE_SIMILARITY = 0.5f;
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
 constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
 // 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
-// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
-constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
-constexpr size_t MAX_SENTENCE_BYTES = 180;
+// 길게 합칠수록 다시 번역하는 시간이 늘어나고, 자막 한 줄이 너무 길어져 읽기 어렵다.
+// 3구간, 180바이트(일본어 약 60자)까지 합치면 쉬지 않고 말하는 방송에서 자막이 두세 문장 길이가 되었고,
+// 번역 모델이 긴 문장의 뒷부분을 빠뜨리는 일도 있었다.
+constexpr size_t MAX_SENTENCE_FRAGMENTS = 2;
+constexpr size_t MAX_SENTENCE_BYTES = 105;
 // 말이 끝난 뒤 번역을 시작하기까지 이보다 오래 걸렸으면 처리가 밀려 있는 것이다. 이때는 합치지 않는다.
 // 같은 말을 다시 번역하는 동안 뒤의 발화가 더 늦어진다.
 constexpr auto MAX_MERGE_LATENESS = std::chrono::seconds(3);
@@ -410,7 +437,7 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    Translator translator;
+    std::unique_ptr<Translator> translator;
     TranslatorConfig translator_config{
         .gpu_layers = options.use_gpu ? options.llm_gpu_layers : 0,
         .gpu_device = options.gpu_device,
@@ -419,9 +446,56 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "Failed to read glossary file: %s\n", to_utf8(options.glossary).c_str());
         return 1;
     }
-    if (!translator.init(options.llm_model, translator_config)) {
-        std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
-        return 1;
+    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid";
+    DeepLTranslatorConfig deepl_config;
+    if (uses_deepl) {
+        deepl_config.api_key = read_environment_variable("DEEPL_API_KEY");
+        if (deepl_config.api_key.empty()) {
+            std::fprintf(stderr, "Set the DEEPL_API_KEY environment variable to translate with DeepL.\n");
+            return 1;
+        }
+        if (options.language != "auto") {
+            for (const char ch : options.language) {
+                deepl_config.source_language += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            }
+        }
+    }
+    if (options.translator == "deepl") {
+        std::printf("Translating with DeepL.\n");
+        translator =
+            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), translator_config, deepl_config);
+    } else if (options.translator == "hybrid") {
+        // DeepL 번역을 초안으로 받아, 그 초안을 참고해 로컬 모델로 번역한다.
+        translator_config.reference_drafts = true;
+        auto llama_translator = std::make_unique<LlamaTranslator>();
+        if (!llama_translator->init(options.llm_model, translator_config)) {
+            std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
+            return 1;
+        }
+        std::printf("Translating with the local model, using DeepL drafts.\n");
+        translator = std::make_unique<DraftedTranslator>(
+            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), translator_config, deepl_config),
+            std::move(llama_translator), translator_config.target_language);
+    } else if (options.translator == "api") {
+        // API로 번역하면 로컬 번역 모델을 불러오지 않으므로 그만큼 VRAM이 남는다.
+        ApiTranslatorConfig api_config{.api_key = read_environment_variable("ANTHROPIC_API_KEY")};
+        if (api_config.api_key.empty()) {
+            std::fprintf(stderr, "Set the ANTHROPIC_API_KEY environment variable to translate with the API.\n");
+            return 1;
+        }
+        if (!options.api_model.empty()) {
+            api_config.model = options.api_model;
+        }
+        std::printf("Translating with the API (%s).\n", api_config.model.c_str());
+        translator =
+            std::make_unique<ApiTranslator>(std::make_unique<WinHttpClient>(), translator_config, api_config);
+    } else {
+        auto llama_translator = std::make_unique<LlamaTranslator>();
+        if (!llama_translator->init(options.llm_model, translator_config)) {
+            std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
+            return 1;
+        }
+        translator = std::move(llama_translator);
     }
 
     // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
@@ -500,7 +574,7 @@ int wmain(int argc, wchar_t** argv) {
             // 방송 화면이 아닌 페이지(목록, 검색 등)에서는 빈 정보가 온다. 그때는 직전 정보를 그대로 둔다.
             const std::string stream_info = build_stream_info(*context);
             if (!stream_info.empty() && stream_info != applied_stream_info) {
-                translator.set_stream_info(stream_info);
+                translator->set_stream_info(stream_info);
                 applied_stream_info = stream_info;
                 std::printf("Stream context: %s\n", stream_info.c_str());
             }
@@ -583,8 +657,8 @@ int wmain(int argc, wchar_t** argv) {
             if (!tail_voice.empty()) {
                 sentence.tail_voice = std::move(tail_voice);
             }
-            translation = translator.translate(sentence.source, sentence.chat, merges,
-                                               options.stream_subtitles ? show_partial : Translator::PartialCallback{});
+            translation = translator->translate(sentence.source, sentence.chat, merges,
+                                                options.stream_subtitles ? show_partial : Translator::PartialCallback{});
         }
         const auto finished_at = Clock::now();
         if (!translation.empty() && !first_shown_at) {
