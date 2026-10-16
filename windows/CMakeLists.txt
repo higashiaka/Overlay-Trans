@@ -2,6 +2,7 @@ add_executable(OverlayTransWin
     main.cpp
     capture/audio_file_reader.cpp
     capture/loopback_capture.cpp
+    net/winhttp_client.cpp
     tray/tray_icon.cpp
 )
 
@@ -21,6 +22,8 @@ target_link_libraries(OverlayTransWin PRIVATE
     # 로컬 앱 데이터 폴더 조회, 알림 영역 아이콘
     shell32
     user32
+    # 번역 API 호출 (HTTPS)
+    winhttp
 )
 
 # sherpa-onnx와 ONNX Runtime DLL을 실행 파일 옆에 복사한다. (화자 구분)

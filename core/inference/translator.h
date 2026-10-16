@@ -22,33 +22,51 @@ struct TranslatorConfig {
     size_t context_lines = 6;
     // 고정해서 쓸 번역 표기. 한 줄에 하나씩 "원문 = 번역" 형식으로 적는다. (UTF-8)
     std::string glossary;
+    // 기계 번역 초안을 참고로 함께 받아 번역할지. 켜면 지시문과 예시에 초안 형식이 들어간다.
+    bool reference_drafts = false;
 };
 
-// llama.cpp로 인식된 문장을 번역한다. 앞서 번역한 문장들을 맥락으로 함께 사용한다.
+// 인식된 문장을 번역한다. 앞서 번역한 문장들을 맥락으로 함께 사용한다.
+// 로컬 모델(LlamaTranslator)과 API(ApiTranslator) 중 하나를 골라 쓴다.
 class Translator {
 public:
-    Translator();
-    ~Translator();
-
     // 만들어지는 중인 번역문을 받는다. 번역문의 앞부분(UTF-8)이 넘어오며, translate를 호출한 스레드에서 호출된다.
     using PartialCallback = std::function<void(std::string_view partial)>;
+
+    Translator() = default;
+    virtual ~Translator() = default;
 
     Translator(const Translator&) = delete;
     Translator& operator=(const Translator&) = delete;
 
-    bool init(const std::filesystem::path& model_path, const TranslatorConfig& config);
-
     // 방송 제목이나 게임 이름처럼 번역에 참고할 정보를 지시문에 넣는다. (UTF-8, 비우면 제거)
     // translate와 같은 스레드에서 호출해야 한다.
-    void set_stream_info(const std::string& info);
+    virtual void set_stream_info(const std::string& info) = 0;
 
     // UTF-8 문장을 번역해 UTF-8로 반환한다. 실패하면 빈 문자열을 반환한다.
     // chat에는 이 발화 직전에 올라온 채팅을 "이름: 내용" 형식으로 넘긴다. 번역의 맥락으로만 쓰인다.
     // replace_previous가 true면 직전에 번역한 문장을 맥락에서 빼고 이 문장으로 바꾼다.
     // 직전 문장에 말이 이어져서, 둘을 합친 문장을 다시 번역할 때 쓴다.
     // on_partial을 넘기면 번역문이 만들어지는 동안 그때까지 만들어진 부분을 여러 번 알려 준다.
-    std::string translate(std::string_view text, std::span<const std::string> chat = {},
-                          bool replace_previous = false, const PartialCallback& on_partial = {});
+    virtual std::string translate(std::string_view text, std::span<const std::string> chat = {},
+                                  bool replace_previous = false, const PartialCallback& on_partial = {}) = 0;
+};
+
+// llama.cpp로 번역한다.
+class LlamaTranslator final : public Translator {
+public:
+    LlamaTranslator();
+    ~LlamaTranslator() override;
+
+    bool init(const std::filesystem::path& model_path, const TranslatorConfig& config);
+
+    void set_stream_info(const std::string& info) override;
+    std::string translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
+                          const PartialCallback& on_partial) override;
+    // draft에 기계 번역 초안(UTF-8)을 함께 넘긴다. TranslatorConfig::reference_drafts를 켜고 init해야 한다.
+    // 초안이 비어 있으면 초안 없이 번역한다.
+    std::string translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
+                          const PartialCallback& on_partial, const std::string& draft);
 
 private:
     struct Impl;

@@ -33,6 +33,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | VAD | Silero VAD | whisper.cpp 내장 VAD 사용 (발화 구간 검출) |
 | STT Engine | whisper.cpp | 온디바이스 음성 인식 |
 | LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 |
+| 번역 API (선택) | DeepL API, Claude API (WinHTTP) | `--translator hybrid`로 켜면 DeepL 번역을 참고해 로컬 모델이 번역. `deepl`, `api`는 API만으로 번역. 기본은 로컬 번역 |
 | 목소리 비교 | sherpa-onnx | 앞뒤 발화의 목소리 특징(3D-Speaker CAM++)을 비교해 다른 사람의 말은 합치지 않음. 빌드할 때 공식 배포 바이너리를 내려받음 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
@@ -98,13 +99,16 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 .
 ├── core/                          # [C++] 플랫폼 독립적인 핵심 엔진
 │   ├── audio/                     # 오디오 버퍼링 및 VAD 알고리즘 구현체
-│   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스
+│   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스, 번역 API 클라이언트
+│   ├── net/                       # HTTPS 요청 인터페이스 (구현은 플랫폼별 쉘에 둠)
 │   ├── server/                    # 브라우저 확장 프로그램과 통신하는 로컬 서버
-│   ├── text/                      # 번역 결과 후처리 (가타카나 표기, 글자 종류 판별)
+│   ├── text/                      # 번역 결과 후처리 (가타카나 표기, 글자 종류 판별, 존댓말을 반말로)
 │   └── models/                    # GGUF 양자화 모델 파일 보관 (gitignore)
 ├── windows/                       # [Windows] 데스크톱 쉘
 │   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio), 오디오 파일 입력
+│   ├── net/                       # WinHTTP로 구현한 HTTPS 요청
 │   └── main.cpp                   # 윈도우 실행 진입점
+├── glossary/                      # 번역 용어집 (방송에서 자주 나오는 속어와 신조어)
 ├── extension/                     # [브라우저] 영상 위에 자막을 표시하는 확장 프로그램
 │   ├── background.js              # 앱의 로컬 서버에서 자막을 받아 페이지로 전달
 │   ├── content/                   # 자막 표시 (sites/ 아래에 사이트별 화면 구조 코드)
@@ -234,7 +238,22 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-hint "ビッツ、サブスク、ギフト"
 
 # 번역 용어집: UTF-8 텍스트 파일에 한 줄에 하나씩 "원문 = 번역" 형식으로 적음 (예: 明後日 = 모레)
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossary glossary.txt
+# glossary/ja-ko-stream.txt에 방송에서 자주 나오는 속어와 신조어(メロい, キモい, 草 등)를 모아 둠
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossary glossary/ja-ko-stream.txt
+
+# DeepL 번역을 초안으로 받아, 그 초안을 참고해 로컬 번역 모델로 번역 (DEEPL_API_KEY 환경 변수 필요)
+# DeepL은 낱말 뜻이 정확하지만 끊긴 말을 끊긴 대로 옮겨 읽기 어렵고, 로컬 모델은 문장을 자연스럽게 다듬지만 낱말을 틀리기 쉬움
+# 초안을 받지 못하면 로컬 모델만으로 번역하고, 로컬 모델이 원문 일부를 빠뜨리면 초안을 씀. 문장마다 약 0.4초가 더 걸림
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator hybrid --glossary glossary/ja-ko-stream.txt
+
+# 로컬 번역 모델 대신 DeepL로 번역 (인터넷 연결과 API 키 필요. DeepL API Free는 월 50만~100만 자 무료)
+# API 키는 DEEPL_API_KEY 환경 변수로 넘김. 번역문의 존댓말 어미는 반말로 바꿈
+# 로컬 번역 모델을 불러오지 않으므로 그만큼 VRAM이 남음. 용어집과 방송 정보는 쓰지 않음
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator deepl
+
+# Claude API로 번역 (API 키는 ANTHROPIC_API_KEY 환경 변수, 사용량만큼 요금이 듦)
+# 기본 모델은 claude-haiku-5-5이고, --api-model로 바꿀 수 있음
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator api
 
 # 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음
@@ -244,6 +263,7 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-stt off
 
 # 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
+# 자막이 너무 길어지지 않도록 두 구간, 일본어 약 35자까지만 합침
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
 
 # 번역문이 다 만들어지기 전에, 만들어진 부분부터 자막으로 보냄 (기본으로 켜짐). 끄려면 off

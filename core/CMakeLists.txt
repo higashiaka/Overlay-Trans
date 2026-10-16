@@ -2,14 +2,19 @@ add_library(overlay_core STATIC
     audio/ring_buffer.cpp
     audio/vad_segmenter.cpp
     audio/wav_writer.cpp
+    inference/api_translator.cpp
+    inference/deepl_translator.cpp
+    inference/drafted_translator.cpp
     inference/recognition_worker.cpp
     inference/voice_matcher.cpp
     inference/speech_recognizer.cpp
+    inference/translation_prompt.cpp
     inference/translator.cpp
     inference/whisper_log.cpp
     server/pairing_token.cpp
     server/subtitle_server.cpp
     text/katakana.cpp
+    text/korean_style.cpp
     text/script.cpp
 )
 
