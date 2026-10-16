@@ -3,7 +3,6 @@
 #include "audio/wav_writer.h"
 #include "capture/audio_file_reader.h"
 #include "capture/loopback_capture.h"
-#include "inference/api_translator.h"
 #include "inference/deepl_translator.h"
 #include "inference/drafted_translator.h"
 #include "inference/recognition_worker.h"
@@ -62,10 +61,8 @@ struct Options {
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
-    // 번역 방식. local(로컬 모델), api(Claude API, ANTHROPIC_API_KEY), deepl(DeepL API, DEEPL_API_KEY),
-    // hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
+    // 번역 방식. local(로컬 모델), deepl(DeepL API, DEEPL_API_KEY), hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
     std::string translator = "local";
-    std::string api_model;  // 비어 있으면 ApiTranslatorConfig의 기본 모델을 쓴다.
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
@@ -137,8 +134,6 @@ Options parse_options(int argc, wchar_t** argv) {
             options.early_stt = value != L"off";
         } else if (name == L"--translator") {
             options.translator = to_utf8(value);
-        } else if (name == L"--api-model") {
-            options.api_model = to_utf8(value);
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -476,19 +471,6 @@ int wmain(int argc, wchar_t** argv) {
         translator = std::make_unique<DraftedTranslator>(
             std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), translator_config, deepl_config),
             std::move(llama_translator), translator_config.target_language);
-    } else if (options.translator == "api") {
-        // API로 번역하면 로컬 번역 모델을 불러오지 않으므로 그만큼 VRAM이 남는다.
-        ApiTranslatorConfig api_config{.api_key = read_environment_variable("ANTHROPIC_API_KEY")};
-        if (api_config.api_key.empty()) {
-            std::fprintf(stderr, "Set the ANTHROPIC_API_KEY environment variable to translate with the API.\n");
-            return 1;
-        }
-        if (!options.api_model.empty()) {
-            api_config.model = options.api_model;
-        }
-        std::printf("Translating with the API (%s).\n", api_config.model.c_str());
-        translator =
-            std::make_unique<ApiTranslator>(std::make_unique<WinHttpClient>(), translator_config, api_config);
     } else {
         auto llama_translator = std::make_unique<LlamaTranslator>();
         if (!llama_translator->init(options.llm_model, translator_config)) {

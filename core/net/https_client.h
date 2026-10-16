@@ -9,7 +9,7 @@
 namespace overlay_trans {
 
 struct HttpsRequest {
-    std::string host;  // 예: api.anthropic.com
+    std::string host;  // 예: api-free.deepl.com
     std::string path;  // 예: /v1/messages
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
