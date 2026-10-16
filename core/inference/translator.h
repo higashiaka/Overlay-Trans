@@ -27,7 +27,7 @@ struct TranslatorConfig {
 };
 
 // 인식된 문장을 번역한다. 앞서 번역한 문장들을 맥락으로 함께 사용한다.
-// 로컬 모델(LlamaTranslator)과 API(ApiTranslator) 중 하나를 골라 쓴다.
+// 로컬 모델(LlamaTranslator), DeepL(DeepLTranslator), 둘을 함께 쓰는 방식(DraftedTranslator) 중 하나를 골라 쓴다.
 class Translator {
 public:
     // 만들어지는 중인 번역문을 받는다. 번역문의 앞부분(UTF-8)이 넘어오며, translate를 호출한 스레드에서 호출된다.

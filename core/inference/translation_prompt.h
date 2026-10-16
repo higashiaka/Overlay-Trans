@@ -8,7 +8,7 @@
 
 namespace overlay_trans {
 
-// 로컬 모델과 API가 함께 쓰는 번역 지시문과 예시.
+// 로컬 번역 모델(LlamaTranslator)에 넣는 번역 지시문과 예시.
 
 struct TranslationExample {
     const char* source;

@@ -33,7 +33,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | VAD | Silero VAD | whisper.cpp 내장 VAD 사용 (발화 구간 검출) |
 | STT Engine | whisper.cpp | 온디바이스 음성 인식 |
 | LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 |
-| 번역 API (선택) | DeepL API, Claude API (WinHTTP) | `--translator hybrid`로 켜면 DeepL 번역을 참고해 로컬 모델이 번역. `deepl`, `api`는 API만으로 번역. 기본은 로컬 번역 |
+| 번역 API (선택) | DeepL API (WinHTTP) | `--translator hybrid`로 켜면 DeepL 번역을 참고해 로컬 모델이 번역. `deepl`은 DeepL만으로 번역. 기본은 로컬 번역 |
 | 목소리 비교 | sherpa-onnx | 앞뒤 발화의 목소리 특징(3D-Speaker CAM++)을 비교해 다른 사람의 말은 합치지 않음. 빌드할 때 공식 배포 바이너리를 내려받음 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
@@ -250,10 +250,6 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --transl
 # API 키는 DEEPL_API_KEY 환경 변수로 넘김. 번역문의 존댓말 어미는 반말로 바꿈
 # 로컬 번역 모델을 불러오지 않으므로 그만큼 VRAM이 남음. 용어집과 방송 정보는 쓰지 않음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator deepl
-
-# Claude API로 번역 (API 키는 ANTHROPIC_API_KEY 환경 변수, 사용량만큼 요금이 듦)
-# 기본 모델은 claude-haiku-5-5이고, --api-model로 바꿀 수 있음
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator api
 
 # 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음

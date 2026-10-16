@@ -2,7 +2,6 @@ add_library(overlay_core STATIC
     audio/ring_buffer.cpp
     audio/vad_segmenter.cpp
     audio/wav_writer.cpp
-    inference/api_translator.cpp
     inference/deepl_translator.cpp
     inference/drafted_translator.cpp
     inference/recognition_worker.cpp
