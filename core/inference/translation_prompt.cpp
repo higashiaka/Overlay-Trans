@@ -42,7 +42,9 @@ std::string build_system_prompt(const TranslatorConfig& config, const std::strin
     prompt += "Katakana words are usually loanwords, game terms, or names: unless you are sure of the meaning, ";
     prompt += "transliterate them by sound instead of guessing a translation. ";
     prompt += "Transliterate people's names by sound as well. ";
-    prompt += "A question ending in くない? with rising tone asks for agreement (isn't it ~?), not a negative.";
+    // "普通にいいのでは?" -> "괜찮지 않아."처럼 동의를 구하는 말을 부정문으로 옮겨 뜻이 정반대가 되는 일이 있었다.
+    prompt += "A question ending in くない?, じゃない?, んじゃないかな, or のでは? asks for agreement ";
+    prompt += "(isn't it ~?, I think it's ~), not a negative.";
 
     if (config.target_language == "Korean") {
         prompt += " Examples: スパイク -> 스파이크, エイム -> 에임, ボックス -> 박스, ビンゴ -> 빙고, ミントさん -> 민트 님.";
