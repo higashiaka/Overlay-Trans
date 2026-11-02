@@ -19,6 +19,36 @@ const pairButton = document.getElementById("pair");
 const resultElement = document.getElementById("result");
 const showSourceCheckbox = document.getElementById("show-source");
 const diagnosticsElement = document.getElementById("diagnostics");
+const sourceLanguage = document.getElementById("source-language");
+const targetLanguage = document.getElementById("target-language");
+const translator = document.getElementById("translator");
+const deeplFields = document.getElementById("deepl-fields");
+const deeplKey = document.getElementById("deepl-key");
+const keyStatus = document.getElementById("key-status");
+const saveButton = document.getElementById("save-settings");
+const settingsResult = document.getElementById("settings-result");
+let hasDeeplKey = false;
+
+function updateDeeplFields() {
+  deeplFields.hidden = translator.value === "local";
+}
+
+async function loadSettings() {
+  const response = await chrome.runtime.sendMessage({ type: "getSettings" });
+  if (!response?.ok) {
+    saveButton.disabled = true;
+    settingsResult.textContent = "앱을 연결하면 번역 설정을 변경할 수 있습니다.";
+    return;
+  }
+  saveButton.disabled = false;
+  settingsResult.textContent = "";
+  sourceLanguage.value = response.settings.source_language;
+  targetLanguage.value = response.settings.target_language;
+  translator.value = response.settings.translator;
+  hasDeeplKey = response.settings.has_deepl_key;
+  keyStatus.textContent = hasDeeplKey ? "기존 API 키가 앱에 저장되어 있습니다." : "저장된 API 키가 없습니다.";
+  updateDeeplFields();
+}
 
 async function refreshStatus() {
   const { status, diagnostics } = await chrome.runtime.sendMessage({ type: "getStatus" });
@@ -42,9 +72,38 @@ async function pair() {
   resultElement.textContent = response.ok ? "연결되었습니다." : PAIR_FAILURE_TEXT[response.reason];
   pairButton.disabled = false;
   refreshStatus();
+  if (response.ok) loadSettings();
 }
 
 pairButton.addEventListener("click", pair);
+translator.addEventListener("change", updateDeeplFields);
+saveButton.addEventListener("click", async () => {
+  if (translator.value !== "local" && !deeplKey.value.trim() && !hasDeeplKey) {
+    settingsResult.textContent = "DeepL 번역을 사용하려면 API 키를 입력하세요.";
+    return;
+  }
+  saveButton.disabled = true;
+  settingsResult.textContent = "저장 중…";
+  const enteredNewKey = Boolean(deeplKey.value.trim());
+  const response = await chrome.runtime.sendMessage({
+    type: "saveSettings",
+    settings: {
+      source_language: sourceLanguage.value,
+      target_language: targetLanguage.value,
+      translator: translator.value,
+      ...(deeplKey.value.trim() ? { deepl_key: deeplKey.value.trim() } : {}),
+    },
+  });
+  deeplKey.value = "";
+  saveButton.disabled = false;
+  if (response?.ok) {
+    hasDeeplKey = enteredNewKey || hasDeeplKey;
+    keyStatus.textContent = hasDeeplKey ? "기존 API 키가 앱에 저장되어 있습니다." : "저장된 API 키가 없습니다.";
+    settingsResult.textContent = "저장했습니다. Windows 앱을 다시 실행하면 적용됩니다.";
+  } else {
+    settingsResult.textContent = "저장하지 못했습니다. 앱 연결과 입력값을 확인하세요.";
+  }
+});
 codeInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     pair();
@@ -61,4 +120,5 @@ chrome.storage.local.get({ pairingCode: "", showSource: true }).then(({ pairingC
 });
 
 refreshStatus();
+loadSettings();
 setInterval(refreshStatus, 1000);

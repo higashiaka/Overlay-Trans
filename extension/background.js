@@ -166,5 +166,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true; // 응답을 나중에 보낸다.
   }
 
+  if (message?.type === "getSettings" || message?.type === "saveSettings") {
+    loadPairing().then(async (pairing) => {
+      if (!pairing) return { ok: false, reason: "unpaired" };
+      try {
+        const response = await fetch(`http://127.0.0.1:${pairing.port}/v1/settings`, {
+          method: message.type === "saveSettings" ? "POST" : "GET",
+          headers: { Authorization: `Bearer ${pairing.key}`, "Content-Type": "application/json" },
+          ...(message.type === "saveSettings" ? { body: JSON.stringify(message.settings) } : {}),
+        });
+        if (!response.ok) return { ok: false, reason: response.status === 401 ? "rejected" : "error" };
+        return { ok: true, settings: await response.json() };
+      } catch {
+        return { ok: false, reason: "unreachable" };
+      }
+    }).then(sendResponse);
+    return true;
+  }
+
   return false;
 });
