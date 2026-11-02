@@ -400,9 +400,9 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
     WaitForSingleObject(quit_event(), INFINITE);
 
     capture.stop();
+    worker.stop();
     consumer.request_stop();
     consumer.join();
-    worker.wait_until_idle();
     wav_dump.close();
 
     std::printf("Dropped %llu samples.\n", static_cast<unsigned long long>(ring.dropped_samples()));

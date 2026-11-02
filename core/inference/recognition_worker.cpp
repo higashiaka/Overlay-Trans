@@ -44,6 +44,7 @@ struct RecognitionWorker::Impl {
     std::condition_variable_any changed;
     // 맨 앞이 작업 스레드가 처리 중인 구간이다. Early 상태인 구간은 많아야 하나이고 항상 맨 뒤에 있다.
     std::deque<Job> jobs;
+    bool stopping = false;
 
     // 다른 멤버가 모두 준비된 뒤에 시작하고 가장 먼저 끝나도록 마지막에 둔다.
     std::jthread thread;
@@ -106,17 +107,22 @@ RecognitionWorker::RecognitionWorker(SpeechRecognizer& recognizer, ResultCallbac
 }
 
 RecognitionWorker::~RecognitionWorker() {
-    // 하던 인식을 끝까지 기다리지 않고 멈춘다.
+    stop();
+}
+
+void RecognitionWorker::stop() {
     std::lock_guard lock(impl_->mutex);
+    impl_->stopping = true;
     impl_->thread.request_stop();
     for (Job& job : impl_->jobs) {
         job.stop.request_stop();
     }
+    impl_->changed.notify_all();
 }
 
 void RecognitionWorker::begin_early(std::span<const float> samples) {
     std::lock_guard lock(impl_->mutex);
-    if (impl_->jobs.size() >= MAX_QUEUED_JOBS) {
+    if (impl_->stopping || impl_->jobs.size() >= MAX_QUEUED_JOBS) {
         return;
     }
     impl_->jobs.push_back({.samples = {samples.begin(), samples.end()}, .state = JobState::Early});
@@ -133,6 +139,9 @@ void RecognitionWorker::submit(const SpeechSegment& segment) {
     const auto speech_ended_at = Clock::now() - std::chrono::milliseconds(segment.waited_ms);
 
     std::unique_lock lock(impl_->mutex);
+    if (impl_->stopping) {
+        return;
+    }
     if (!impl_->jobs.empty() && impl_->jobs.back().state == JobState::Early) {
         Job& early = impl_->jobs.back();
         if (early.samples.size() == samples.size()) {
@@ -146,7 +155,10 @@ void RecognitionWorker::submit(const SpeechSegment& segment) {
         impl_->cancel_early();
     }
 
-    impl_->changed.wait(lock, [&] { return impl_->jobs.size() < MAX_QUEUED_JOBS; });
+    impl_->changed.wait(lock, [&] { return impl_->stopping || impl_->jobs.size() < MAX_QUEUED_JOBS; });
+    if (impl_->stopping) {
+        return;
+    }
     impl_->jobs.push_back({.samples = {samples.begin(), samples.end()},
                            .state = JobState::Confirmed,
                            .speech_ended_at = speech_ended_at,
