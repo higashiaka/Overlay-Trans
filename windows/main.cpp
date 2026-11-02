@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 #include <deque>
 #include <filesystem>
@@ -768,5 +769,9 @@ int wmain(int argc, wchar_t** argv) {
     if (!is_live) {
         return run_file(options, config, vad, worker);
     }
-    return run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    const int result = run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    // 캡처와 WAV 저장은 run_live에서 끝냈다. Debug 인식 커널이 긴 연산 중이면
+    // 작업 스레드 소멸자가 끝날 때까지 기다리므로, 사용자 종료 요청은 여기서 마친다.
+    std::fflush(nullptr);
+    std::_Exit(result);
 }
