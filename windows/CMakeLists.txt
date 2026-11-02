@@ -14,6 +14,7 @@ target_compile_definitions(OverlayTransWin PRIVATE
 )
 target_link_libraries(OverlayTransWin PRIVATE
     overlay_core
+    overlay_httplib
     overlay_miniaudio
     # Media Foundation (오디오 파일 디코딩)
     mfplat
