@@ -209,7 +209,7 @@ void SubtitleServer::Impl::handle_settings(const httplib::Request& request, http
     const bool valid_target = settings.target_language == "Korean" || settings.target_language == "English" ||
                               settings.target_language == "Japanese";
     const bool valid_translator = settings.translator == "local" || settings.translator == "deepl" ||
-                                  settings.translator == "hybrid";
+                                  settings.translator == "hybrid" || settings.translator == "compare";
     if (!valid_source || !valid_target || !valid_translator ||
         (settings.translator != "local" && settings.deepl_key.empty() && !settings.has_deepl_key)) {
         response.status = 400;

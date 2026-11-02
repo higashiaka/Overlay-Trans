@@ -21,6 +21,7 @@
 
 #include <shlobj.h>
 
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
@@ -204,7 +205,8 @@ bool read_text_file(const std::filesystem::path& path, std::string& text) {
 }
 
 std::unique_ptr<Translator> create_translator(const Options& options, TranslatorConfig config) {
-    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid";
+    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid" ||
+                            options.translator == "compare";
     DeepLTranslatorConfig deepl_config;
     if (uses_deepl) {
         deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
@@ -221,7 +223,7 @@ std::unique_ptr<Translator> create_translator(const Options& options, Translator
     if (options.translator == "deepl") {
         return std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config);
     }
-    if (options.translator == "hybrid") {
+    if (options.translator == "hybrid" || options.translator == "compare") {
         config.reference_drafts = true;
     }
     auto llama_translator = std::make_unique<LlamaTranslator>();
@@ -229,10 +231,12 @@ std::unique_ptr<Translator> create_translator(const Options& options, Translator
         std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
         return {};
     }
-    if (options.translator == "hybrid") {
-        return std::make_unique<DraftedTranslator>(
+    if (options.translator == "hybrid" || options.translator == "compare") {
+        auto drafted = std::make_unique<DraftedTranslator>(
             std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config),
             std::move(llama_translator), config.target_language);
+        drafted->set_compare_mode(options.translator == "compare");
+        return drafted;
     }
     return llama_translator;
 }
@@ -506,13 +510,15 @@ int wmain(int argc, wchar_t** argv) {
     std::string applied_stream_info;        // 번역 지시문에 마지막으로 넣은 방송 설명
 
     std::mutex settings_mutex;
+    std::mutex settings_view_mutex;
+    std::mutex settings_save_mutex;
     TranslationSettings pending_settings = saved_settings;
     pending_settings.source_language = options.language;
     pending_settings.target_language = options.target_language;
     pending_settings.translator = options.translator;
     if (pending_settings.deepl_key.empty()) pending_settings.deepl_key = read_environment_variable("DEEPL_API_KEY");
     pending_settings.has_deepl_key = !pending_settings.deepl_key.empty();
-    uint64_t settings_generation = 0;
+    std::atomic<uint64_t> settings_generation{0};
 
     SubtitleServer server;
     const ServerConfig server_config{
@@ -549,18 +555,38 @@ int wmain(int argc, wchar_t** argv) {
                 }
             },
         .get_settings = [&] {
-            std::lock_guard lock(settings_mutex);
+            std::lock_guard lock(settings_view_mutex);
             return pending_settings;
         },
         .save_settings = [&](const TranslationSettings& settings) {
+            std::lock_guard save_lock(settings_save_mutex);
+            TranslationSettings previous;
+            {
+                std::lock_guard view_lock(settings_view_mutex);
+                previous = pending_settings;
+            }
+            const bool compare_toggle = (settings.translator == "compare" && previous.translator == "hybrid") ||
+                                        (settings.translator == "hybrid" && previous.translator == "compare");
+            if (compare_toggle && settings.source_language == previous.source_language &&
+                settings.target_language == previous.target_language && settings.deepl_key == previous.deepl_key) {
+                if (!save_translation_settings(settings)) return false;
+                static_cast<DraftedTranslator*>(translator.get())->set_compare_mode(settings.translator == "compare");
+                {
+                    std::lock_guard view_lock(settings_view_mutex);
+                    pending_settings = settings;
+                }
+                settings_generation.fetch_add(1, std::memory_order_release);
+                return true;
+            }
             std::lock_guard lock(settings_mutex);
-            const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid";
-            const bool rebuild = settings.translator != pending_settings.translator ||
-                                 settings.target_language != pending_settings.target_language ||
-                                 (uses_deepl && (settings.source_language != pending_settings.source_language ||
-                                                 settings.deepl_key != pending_settings.deepl_key));
-            const bool retarget_local = settings.translator == "local" && pending_settings.translator == "local" &&
-                                        settings.target_language != pending_settings.target_language;
+            const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid" ||
+                                    settings.translator == "compare";
+            const bool rebuild = settings.translator != previous.translator ||
+                                 settings.target_language != previous.target_language ||
+                                 (uses_deepl && (settings.source_language != previous.source_language ||
+                                                 settings.deepl_key != previous.deepl_key));
+            const bool retarget_local = settings.translator == "local" && previous.translator == "local" &&
+                                        settings.target_language != previous.target_language;
             std::unique_ptr<Translator> replacement;
             if (rebuild && !retarget_local) {
                 Options requested = options;
@@ -580,9 +606,12 @@ int wmain(int argc, wchar_t** argv) {
                                                                                      applied_stream_info);
             }
             if (replacement) translator = std::move(replacement);
-            pending_settings = settings;
-            pending_settings.has_deepl_key = !settings.deepl_key.empty();
-            ++settings_generation;
+            {
+                std::lock_guard view_lock(settings_view_mutex);
+                pending_settings = settings;
+                pending_settings.has_deepl_key = !settings.deepl_key.empty();
+            }
+            settings_generation.fetch_add(1, std::memory_order_release);
             return true;
         },
     };
@@ -606,10 +635,11 @@ int wmain(int argc, wchar_t** argv) {
     uint64_t applied_settings_generation = 0;
     RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
         std::lock_guard settings_lock(settings_mutex);
-        if (applied_settings_generation != settings_generation) {
+        const uint64_t current_settings_generation = settings_generation.load(std::memory_order_acquire);
+        if (applied_settings_generation != current_settings_generation) {
             sentence = {};
             applied_stream_info.clear();
-            applied_settings_generation = settings_generation;
+            applied_settings_generation = current_settings_generation;
         }
         const auto to_ms = [](Clock::duration duration) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
