@@ -1,5 +1,6 @@
 add_executable(OverlayTransWin
     main.cpp
+    translation_settings.cpp
     capture/audio_file_reader.cpp
     capture/loopback_capture.cpp
     net/winhttp_client.cpp
@@ -19,6 +20,7 @@ target_link_libraries(OverlayTransWin PRIVATE
     mfreadwrite
     mfuuid
     ole32
+    crypt32
     # 로컬 앱 데이터 폴더 조회, 알림 영역 아이콘
     shell32
     user32

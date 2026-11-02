@@ -14,6 +14,7 @@
 #include "server/subtitle_server.h"
 #include "text/script.h"
 #include "tray/tray_icon.h"
+#include "translation_settings.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -63,6 +64,8 @@ struct Options {
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
     // 번역 방식. local(로컬 모델), deepl(DeepL API, DEEPL_API_KEY), hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
     std::string translator = "local";
+    std::string target_language = "Korean";
+    std::string deepl_key;
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
@@ -414,7 +417,14 @@ int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     std::printf("OverLay-Trans %s\n", OVERLAY_TRANS_VERSION);
 
-    const Options options = parse_options(argc, argv);
+    Options options = parse_options(argc, argv);
+    const TranslationSettings saved_settings = load_translation_settings();
+    if (std::filesystem::exists(translation_settings_path())) {
+        options.language = saved_settings.source_language;
+        options.target_language = saved_settings.target_language;
+        options.translator = saved_settings.translator;
+        options.deepl_key = saved_settings.deepl_key;
+    }
     const CaptureConfig config;
     VadConfig vad_config;
     if (!options.early_stt) {
@@ -438,6 +448,7 @@ int wmain(int argc, wchar_t** argv) {
 
     std::unique_ptr<Translator> translator;
     TranslatorConfig translator_config{
+        .target_language = options.target_language,
         .gpu_layers = options.use_gpu ? options.llm_gpu_layers : 0,
         .gpu_device = options.gpu_device,
     };
@@ -448,7 +459,7 @@ int wmain(int argc, wchar_t** argv) {
     const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid";
     DeepLTranslatorConfig deepl_config;
     if (uses_deepl) {
-        deepl_config.api_key = read_environment_variable("DEEPL_API_KEY");
+        deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
         if (deepl_config.api_key.empty()) {
             std::fprintf(stderr, "Set the DEEPL_API_KEY environment variable to translate with DeepL.\n");
             return 1;
@@ -494,6 +505,14 @@ int wmain(int argc, wchar_t** argv) {
     std::deque<ReceivedChat> pending_chat;  // 아직 번역 맥락으로 쓰지 않은 채팅
     std::string applied_stream_info;        // 번역 지시문에 마지막으로 넣은 방송 설명
 
+    std::mutex settings_mutex;
+    TranslationSettings pending_settings = saved_settings;
+    pending_settings.source_language = options.language;
+    pending_settings.target_language = options.target_language;
+    pending_settings.translator = options.translator;
+    if (pending_settings.deepl_key.empty()) pending_settings.deepl_key = read_environment_variable("DEEPL_API_KEY");
+    pending_settings.has_deepl_key = !pending_settings.deepl_key.empty();
+
     SubtitleServer server;
     const ServerConfig server_config{
         .port = options.port,
@@ -528,6 +547,17 @@ int wmain(int argc, wchar_t** argv) {
                     pending_chat.pop_front();
                 }
             },
+        .get_settings = [&] {
+            std::lock_guard lock(settings_mutex);
+            return pending_settings;
+        },
+        .save_settings = [&](const TranslationSettings& settings) {
+            std::lock_guard lock(settings_mutex);
+            if (!save_translation_settings(settings)) return false;
+            pending_settings = settings;
+            pending_settings.has_deepl_key = !settings.deepl_key.empty();
+            return true;
+        },
     };
     if (token.empty() || !server.start(server_config)) {
         std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);

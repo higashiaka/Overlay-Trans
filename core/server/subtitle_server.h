@@ -28,6 +28,14 @@ struct ChatMessage {
     std::string text;
 };
 
+struct TranslationSettings {
+    std::string source_language = "auto";
+    std::string target_language = "Korean";
+    std::string translator = "local";
+    std::string deepl_key;
+    bool has_deepl_key = false;
+};
+
 struct ServerConfig {
     int port = 47815;
     // 요청마다 "Authorization: Bearer <token>"으로 확인하는 페어링 키.
@@ -35,6 +43,8 @@ struct ServerConfig {
     // 방송 정보나 새 채팅이 도착하면 서버 스레드에서 호출된다. 비워 두면 받은 내용을 버린다.
     std::function<void(StreamContext)> on_context;
     std::function<void(std::vector<ChatMessage>)> on_chat;
+    std::function<TranslationSettings()> get_settings;
+    std::function<bool(const TranslationSettings&)> save_settings;
 };
 
 // 브라우저 확장 프로그램과 자막, 방송 정보를 주고받는 로컬 HTTP 서버.
