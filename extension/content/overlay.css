@@ -30,6 +30,11 @@
   font-weight: 600;
 }
 
+.overlay-trans-comparison .overlay-trans-translation {
+  white-space: pre-line;
+  font-size: clamp(14px, 1.6vw, 24px);
+}
+
 .overlay-trans-source {
   font-size: clamp(11px, 1.1vw, 18px);
   opacity: 0.75;
