@@ -99,7 +99,7 @@ saveButton.addEventListener("click", async () => {
   if (response?.ok) {
     hasDeeplKey = enteredNewKey || hasDeeplKey;
     keyStatus.textContent = hasDeeplKey ? "기존 API 키가 앱에 저장되어 있습니다." : "저장된 API 키가 없습니다.";
-    settingsResult.textContent = "저장했습니다. Windows 앱을 다시 실행하면 적용됩니다.";
+    settingsResult.textContent = "저장했습니다. 다음 발화부터 적용됩니다.";
   } else {
     settingsResult.textContent = "저장하지 못했습니다. 앱 연결과 입력값을 확인하세요.";
   }
