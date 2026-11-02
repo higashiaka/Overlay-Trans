@@ -675,6 +675,9 @@ int wmain(int argc, wchar_t** argv) {
             }
             translation = translator->translate(sentence.source, sentence.chat, merges,
                                                 options.stream_subtitles ? show_partial : Translator::PartialCallback{});
+            if (translation.empty()) {
+                translation = "[번역 실패] " + sentence.source;
+            }
         }
         const auto finished_at = Clock::now();
         if (!translation.empty() && !first_shown_at) {

@@ -5,6 +5,7 @@
 
 #include <winhttp.h>
 
+#include <cstdio>
 #include <vector>
 
 namespace overlay_trans {
@@ -84,8 +85,12 @@ int WinHttpClient::post(const HttpsRequest& request, const DataCallback& on_data
     const std::wstring wide_headers = to_wide(headers);
     const auto body_size = static_cast<DWORD>(request.body.size());
     if (!WinHttpSendRequest(handle.handle, wide_headers.c_str(), static_cast<DWORD>(-1L),
-                            const_cast<char*>(request.body.data()), body_size, body_size, 0) ||
-        !WinHttpReceiveResponse(handle.handle, nullptr)) {
+                            const_cast<char*>(request.body.data()), body_size, body_size, 0)) {
+        std::fprintf(stderr, "WinHTTP send to %s failed: %lu\n", request.host.c_str(), GetLastError());
+        return 0;
+    }
+    if (!WinHttpReceiveResponse(handle.handle, nullptr)) {
+        std::fprintf(stderr, "WinHTTP receive from %s failed: %lu\n", request.host.c_str(), GetLastError());
         return 0;
     }
 
