@@ -9,6 +9,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <mutex>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -109,6 +110,7 @@ bool gpu_is_opencl() {
 struct SpeechRecognizer::Impl {
     whisper_context* context = nullptr;
     SttConfig config;
+    std::mutex language_mutex;
 };
 
 SpeechRecognizer::SpeechRecognizer() : impl_(std::make_unique<Impl>()) {}
@@ -134,9 +136,19 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
     return true;
 }
 
+void SpeechRecognizer::set_language(std::string language) {
+    std::lock_guard lock(impl_->language_mutex);
+    impl_->config.language = std::move(language);
+}
+
 std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::stop_token stop) {
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.language = impl_->config.language.c_str();
+    std::string language;
+    {
+        std::lock_guard lock(impl_->language_mutex);
+        language = impl_->config.language;
+    }
+    params.language = language.c_str();
     if (!impl_->config.vocabulary_hint.empty()) {
         params.initial_prompt = impl_->config.vocabulary_hint.c_str();
     }

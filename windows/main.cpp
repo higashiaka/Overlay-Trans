@@ -202,6 +202,40 @@ bool read_text_file(const std::filesystem::path& path, std::string& text) {
     return true;
 }
 
+std::unique_ptr<Translator> create_translator(const Options& options, TranslatorConfig config) {
+    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid";
+    DeepLTranslatorConfig deepl_config;
+    if (uses_deepl) {
+        deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
+        if (deepl_config.api_key.empty()) {
+            std::fprintf(stderr, "DeepL API key is missing.\n");
+            return {};
+        }
+        if (options.language != "auto") {
+            for (const char ch : options.language) {
+                deepl_config.source_language += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            }
+        }
+    }
+    if (options.translator == "deepl") {
+        return std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config);
+    }
+    if (options.translator == "hybrid") {
+        config.reference_drafts = true;
+    }
+    auto llama_translator = std::make_unique<LlamaTranslator>();
+    if (!llama_translator->init(options.llm_model, config)) {
+        std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
+        return {};
+    }
+    if (options.translator == "hybrid") {
+        return std::make_unique<DraftedTranslator>(
+            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config),
+            std::move(llama_translator), config.target_language);
+    }
+    return llama_translator;
+}
+
 // 번역 지시문에 넣을 방송 설명을 만든다.
 std::string build_stream_info(const StreamContext& context) {
     std::string info;
@@ -394,8 +428,9 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
     SetConsoleCtrlHandler(on_console_event, TRUE);
     // Enter를 기다리는 스레드는 끝낼 방법이 없으므로 떼어 놓는다. 프로세스가 끝나면 함께 끝난다.
     std::thread([] {
-        std::getchar();
-        SetEvent(quit_event());
+        if (std::getchar() != EOF) {
+            SetEvent(quit_event());
+        }
     }).detach();
     WaitForSingleObject(quit_event(), INFINITE);
 
@@ -456,44 +491,8 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "Failed to read glossary file: %s\n", to_utf8(options.glossary).c_str());
         return 1;
     }
-    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid";
-    DeepLTranslatorConfig deepl_config;
-    if (uses_deepl) {
-        deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
-        if (deepl_config.api_key.empty()) {
-            std::fprintf(stderr, "Set the DEEPL_API_KEY environment variable to translate with DeepL.\n");
-            return 1;
-        }
-        if (options.language != "auto") {
-            for (const char ch : options.language) {
-                deepl_config.source_language += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-            }
-        }
-    }
-    if (options.translator == "deepl") {
-        std::printf("Translating with DeepL.\n");
-        translator =
-            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), translator_config, deepl_config);
-    } else if (options.translator == "hybrid") {
-        // DeepL 번역을 초안으로 받아, 그 초안을 참고해 로컬 모델로 번역한다.
-        translator_config.reference_drafts = true;
-        auto llama_translator = std::make_unique<LlamaTranslator>();
-        if (!llama_translator->init(options.llm_model, translator_config)) {
-            std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
-            return 1;
-        }
-        std::printf("Translating with the local model, using DeepL drafts.\n");
-        translator = std::make_unique<DraftedTranslator>(
-            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), translator_config, deepl_config),
-            std::move(llama_translator), translator_config.target_language);
-    } else {
-        auto llama_translator = std::make_unique<LlamaTranslator>();
-        if (!llama_translator->init(options.llm_model, translator_config)) {
-            std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
-            return 1;
-        }
-        translator = std::move(llama_translator);
-    }
+    translator = create_translator(options, translator_config);
+    if (!translator) return 1;
 
     // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
     const std::string token = load_or_create_pairing_token(pairing_token_path());
@@ -512,6 +511,7 @@ int wmain(int argc, wchar_t** argv) {
     pending_settings.translator = options.translator;
     if (pending_settings.deepl_key.empty()) pending_settings.deepl_key = read_environment_variable("DEEPL_API_KEY");
     pending_settings.has_deepl_key = !pending_settings.deepl_key.empty();
+    uint64_t settings_generation = 0;
 
     SubtitleServer server;
     const ServerConfig server_config{
@@ -553,9 +553,35 @@ int wmain(int argc, wchar_t** argv) {
         },
         .save_settings = [&](const TranslationSettings& settings) {
             std::lock_guard lock(settings_mutex);
+            const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid";
+            const bool rebuild = settings.translator != pending_settings.translator ||
+                                 settings.target_language != pending_settings.target_language ||
+                                 (uses_deepl && (settings.source_language != pending_settings.source_language ||
+                                                 settings.deepl_key != pending_settings.deepl_key));
+            const bool retarget_local = settings.translator == "local" && pending_settings.translator == "local" &&
+                                        settings.target_language != pending_settings.target_language;
+            std::unique_ptr<Translator> replacement;
+            if (rebuild && !retarget_local) {
+                Options requested = options;
+                requested.language = settings.source_language;
+                requested.target_language = settings.target_language;
+                requested.translator = settings.translator;
+                requested.deepl_key = settings.deepl_key;
+                TranslatorConfig requested_config = translator_config;
+                requested_config.target_language = settings.target_language;
+                replacement = create_translator(requested, requested_config);
+                if (!replacement) return false;
+            }
             if (!save_translation_settings(settings)) return false;
+            recognizer.set_language(settings.source_language);
+            if (retarget_local) {
+                static_cast<LlamaTranslator*>(translator.get())->set_target_language(settings.target_language,
+                                                                                     applied_stream_info);
+            }
+            if (replacement) translator = std::move(replacement);
             pending_settings = settings;
             pending_settings.has_deepl_key = !settings.deepl_key.empty();
+            ++settings_generation;
             return true;
         },
     };
@@ -576,7 +602,14 @@ int wmain(int argc, wchar_t** argv) {
 
     const bool is_live = options.input_file.empty();
     OpenSentence sentence;
+    uint64_t applied_settings_generation = 0;
     RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
+        std::lock_guard settings_lock(settings_mutex);
+        if (applied_settings_generation != settings_generation) {
+            sentence = {};
+            applied_stream_info.clear();
+            applied_settings_generation = settings_generation;
+        }
         const auto to_ms = [](Clock::duration duration) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
         };

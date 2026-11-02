@@ -219,7 +219,7 @@ void SubtitleServer::Impl::handle_settings(const httplib::Request& request, http
         response.status = 500;
         return;
     }
-    response.set_content(R"({"ok":true,"restart_required":true})", JSON_TYPE);
+    response.set_content(R"({"ok":true,"restart_required":false})", JSON_TYPE);
 }
 
 SubtitleServer::SubtitleServer() : impl_(std::make_unique<Impl>()) {}

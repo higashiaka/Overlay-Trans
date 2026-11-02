@@ -36,6 +36,9 @@ public:
 
     bool init(const std::filesystem::path& model_path, const SttConfig& config);
 
+    // 다음 발화부터 사용할 인식 언어를 바꾼다. 인식 중 호출해도 안전하다.
+    void set_language(std::string language);
+
     // 16kHz 모노 샘플을 UTF-8 텍스트로 변환한다. 실패하면 빈 문자열을 반환한다.
     // stop으로 중단을 요청하면 하던 계산 단계까지만 마치고 빈 문자열을 반환한다.
     std::string transcribe(std::span<const float> samples, std::stop_token stop = {});

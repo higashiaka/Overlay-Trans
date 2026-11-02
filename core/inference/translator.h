@@ -61,6 +61,7 @@ public:
     bool init(const std::filesystem::path& model_path, const TranslatorConfig& config);
 
     void set_stream_info(const std::string& info) override;
+    void set_target_language(std::string language, const std::string& stream_info);
     std::string translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
                           const PartialCallback& on_partial) override;
     // draft에 기계 번역 초안(UTF-8)을 함께 넘긴다. TranslatorConfig::reference_drafts를 켜고 init해야 한다.
