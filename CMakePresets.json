@@ -19,6 +19,15 @@
       }
     },
     {
+      "name": "windows-x64-debug",
+      "displayName": "Windows x64 (Debug)",
+      "inherits": "windows-x64",
+      "binaryDir": "${sourceDir}/build/settings-debug",
+      "cacheVariables": {
+        "GGML_LLAMAFILE": "OFF"
+      }
+    },
+    {
       "name": "windows-arm64",
       "displayName": "Windows ARM64 (CPU)",
       "generator": "Ninja",
@@ -55,6 +64,11 @@
       "name": "windows-x64-vulkan",
       "configurePreset": "windows-x64-vulkan",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-x64-debug",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-arm64",
