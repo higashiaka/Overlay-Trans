@@ -25,6 +25,11 @@ jobs:
             build-dir: build/vk
             arch: x64
             backend: vulkan
+          - name: x64-cpu
+            preset: windows-x64
+            build-dir: build/windows-x64
+            arch: x64
+            backend: cpu
           # ARM64는 x64 러너에서 Clang으로 교차 빌드한다.
           - name: arm64-cpu
             preset: windows-arm64

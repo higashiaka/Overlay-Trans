@@ -5,6 +5,7 @@
 #include "capture/loopback_capture.h"
 #include "inference/deepl_translator.h"
 #include "inference/drafted_translator.h"
+#include "inference/hardware_profile.h"
 #include "inference/recognition_worker.h"
 #include "inference/voice_matcher.h"
 #include "inference/speech_recognizer.h"
@@ -483,6 +484,12 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
 
 // 한글/일본어가 들어간 파일 경로를 받을 수 있도록 유니코드 인자를 사용한다.
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 2 && std::wcscmp(argv[1], L"--probe-hardware") == 0) {
+        const HardwareProfile profile = probe_hardware();
+        std::printf("{\"vulkan\":%s,\"free_vram_mb\":%zu,\"total_vram_mb\":%zu}\n",
+                    profile.gpu ? "true" : "false", profile.free_vram_mb, profile.total_vram_mb);
+        return 0;
+    }
     // 인식 결과(UTF-8)가 콘솔에서 깨지지 않게 한다.
     SetConsoleOutputCP(CP_UTF8);
     std::printf("OverLay-Trans %s\n", OVERLAY_TRANS_VERSION);

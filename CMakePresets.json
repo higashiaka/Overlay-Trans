@@ -7,7 +7,10 @@
       "displayName": "Windows x64 (CPU)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-x64"
+      "binaryDir": "${sourceDir}/build/windows-x64",
+      "cacheVariables": {
+        "GGML_LLAMAFILE": "OFF"
+      }
     },
     {
       "name": "windows-x64-vulkan",
