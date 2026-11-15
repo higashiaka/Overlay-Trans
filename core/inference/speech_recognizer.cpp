@@ -30,6 +30,9 @@ constexpr size_t SAMPLES_PER_AUDIO_CONTEXT = 320;
 constexpr int MAX_TOKENS_BASE = 16;
 constexpr double MAX_TOKENS_PER_SECOND = 10.0;
 
+// 인식 결과가 방송 이름의 일부와 같을 때 힌트를 되풀이한 것으로 보는 최소 길이(바이트, 일본어 약 4글자).
+constexpr size_t MIN_NAME_ECHO_BYTES = 12;
+
 // 문장 부호를 뺀 형태로 적는다. (remove_punctuation의 결과와 비교한다.)
 constexpr std::string_view KNOWN_HALLUCINATIONS[] = {
     "ご視聴ありがとうございました",
@@ -111,6 +114,10 @@ struct SpeechRecognizer::Impl {
     whisper_context* context = nullptr;
     SttConfig config;
     std::mutex language_mutex;
+
+    std::mutex context_mutex;
+    std::string context_names;   // 방송에 나오는 이름과 용어
+    std::string context_recent;  // 직전에 인식한 말
 };
 
 SpeechRecognizer::SpeechRecognizer() : impl_(std::make_unique<Impl>()) {}
@@ -136,6 +143,12 @@ bool SpeechRecognizer::init(const std::filesystem::path& model_path, const SttCo
     return true;
 }
 
+void SpeechRecognizer::set_context(std::string names, std::string recent) {
+    std::lock_guard lock(impl_->context_mutex);
+    impl_->context_names = std::move(names);
+    impl_->context_recent = std::move(recent);
+}
+
 void SpeechRecognizer::set_language(std::string language) {
     std::lock_guard lock(impl_->language_mutex);
     impl_->config.language = std::move(language);
@@ -144,13 +157,25 @@ void SpeechRecognizer::set_language(std::string language) {
 std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::stop_token stop) {
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     std::string language;
+    // 고정 어휘 힌트, 방송 이름과 용어, 직전에 인식한 말 순서로 붙인다. whisper는 앞선 말로 읽으므로 직전 말을 맨 뒤에 둔다.
+    std::string names;
+    std::string prompt = impl_->config.vocabulary_hint;
     {
         std::lock_guard lock(impl_->language_mutex);
         language = impl_->config.language;
     }
+    {
+        std::lock_guard lock(impl_->context_mutex);
+        names = impl_->context_names;
+        for (const std::string* part : {&impl_->context_names, &impl_->context_recent}) {
+            if (!part->empty()) {
+                prompt += (prompt.empty() ? "" : "、") + *part;
+            }
+        }
+    }
     params.language = language.c_str();
-    if (!impl_->config.vocabulary_hint.empty()) {
-        params.initial_prompt = impl_->config.vocabulary_hint.c_str();
+    if (!prompt.empty()) {
+        params.initial_prompt = prompt.c_str();
     }
     params.n_threads = default_thread_count();
     // 발화 구간 하나를 독립된 한 문장으로 처리한다.
@@ -221,9 +246,13 @@ std::string SpeechRecognizer::transcribe(std::span<const float> samples, std::st
     text.erase(0, text.find_first_not_of(' '));
 
     // 말소리가 뚜렷하지 않은 구간에서는 whisper가 어휘 힌트의 단어를 그대로 되풀이하는 일이 있다.
-    // 결과가 힌트의 일부와 똑같으면 인식 실패로 본다.
+    // 결과가 힌트(고정 어휘와 방송 이름)의 일부와 똑같으면 인식 실패로 본다.
+    // 직전에 인식한 말은 비교하지 않는다. "うん", "見て見て"처럼 같은 말을 실제로 되풀이하는 일이 흔하다.
+    // 방송 이름은 짧은 말이면 비교하지 않는다. 방송인이 자기 이름("ねね")만 말하는 일도 있다.
     const std::string spoken = remove_punctuation(text);
-    if (!spoken.empty() && remove_punctuation(impl_->config.vocabulary_hint).find(spoken) != std::string::npos) {
+    if (!spoken.empty() && (remove_punctuation(impl_->config.vocabulary_hint).find(spoken) != std::string::npos ||
+                            (spoken.size() >= MIN_NAME_ECHO_BYTES &&
+                             remove_punctuation(names).find(spoken) != std::string::npos))) {
         return {};
     }
 

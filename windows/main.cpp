@@ -21,8 +21,8 @@
 
 #include <shlobj.h>
 
-#include <atomic>
 #include <cctype>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -71,6 +71,7 @@ struct Options {
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
+    bool stt_context = true;  // 방송 이름과 직전에 인식한 말을 음성 인식에 맥락으로 알려 줄지
     // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지. 혼자 하는 방송에서도 맞장구 뒤의 말이나 BGM이 바뀐 구간을
     // 다른 사람으로 잘못 보고 합치기를 대부분 막아서(비교 8번 중 7번) 기본으로 끈다. 여러 사람이 하는 방송에서 켠다.
     bool voice_match = false;
@@ -137,6 +138,8 @@ Options parse_options(int argc, wchar_t** argv) {
             options.stream_subtitles = value != L"off";
         } else if (name == L"--merge-sentences") {
             options.merge_sentences = value != L"off";
+        } else if (name == L"--stt-context") {
+            options.stt_context = value != L"off";
         } else if (name == L"--early-stt") {
             options.early_stt = value != L"off";
         } else if (name == L"--translator") {
@@ -256,6 +259,27 @@ std::string build_stream_info(const StreamContext& context) {
     return info;
 }
 
+// UTF-8 글자 수로 센 앞부분 / 뒷부분. 글자 중간에서 자르지 않는다.
+std::string first_characters(std::string_view text, size_t count) {
+    size_t end = 0;
+    for (size_t characters = 0; end < text.size() && characters < count; ++characters) {
+        do {
+            ++end;
+        } while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80);
+    }
+    return std::string(text.substr(0, end));
+}
+
+std::string last_characters(std::string_view text, size_t count) {
+    size_t start = text.size();
+    for (size_t characters = 0; start > 0 && characters < count; ++characters) {
+        do {
+            --start;
+        } while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80);
+    }
+    return std::string(text.substr(start));
+}
+
 // 확장 프로그램에서 받은 채팅 한 줄("이름: 내용")과 받은 시각.
 struct ReceivedChat {
     Clock::time_point received_at;
@@ -306,6 +330,12 @@ constexpr auto MAX_MERGE_LATENESS = std::chrono::seconds(3);
 
 // 방송을 보는 중에 인식 하나에 쓸 수 있는 최대 시간(ms). 이보다 오래 걸린 자막은 이미 늦었고, 뒤의 발화까지 밀리게 한다.
 constexpr uint32_t LIVE_STT_TIME_LIMIT_MS = 4000;
+
+// 음성 인식에 맥락으로 알려 줄 방송 이름(채널, 카테고리, 제목)과 직전 발화의 최대 길이(글자 수), 직전 발화 수.
+// whisper는 앞선 말을 일정 길이(224토큰)까지만 받으므로 짧게 둔다. 방송 제목은 길면 앞부분만 쓴다.
+constexpr size_t MAX_STT_NAME_CHARACTERS = 60;
+constexpr size_t MAX_STT_RECENT_CHARACTERS = 80;
+constexpr size_t MAX_STT_RECENT_LINES = 3;
 
 double to_seconds(Clock::duration duration) {
     return std::chrono::duration<double>(duration).count();
@@ -508,7 +538,6 @@ int wmain(int argc, wchar_t** argv) {
     std::optional<StreamContext> pending_context;
     std::deque<ReceivedChat> pending_chat;  // 아직 번역 맥락으로 쓰지 않은 채팅
     std::string applied_stream_info;        // 번역 지시문에 마지막으로 넣은 방송 설명
-
     std::mutex settings_mutex;
     std::mutex settings_view_mutex;
     std::mutex settings_save_mutex;
@@ -632,12 +661,16 @@ int wmain(int argc, wchar_t** argv) {
 
     const bool is_live = options.input_file.empty();
     OpenSentence sentence;
+    // 음성 인식에 함께 알려 줄 맥락. 방송 이름과 용어, 직전에 인식한 말.
+    std::string stt_names;
+    std::deque<std::string> recent_speech;
     uint64_t applied_settings_generation = 0;
     RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
         std::lock_guard settings_lock(settings_mutex);
         const uint64_t current_settings_generation = settings_generation.load(std::memory_order_acquire);
         if (applied_settings_generation != current_settings_generation) {
             sentence = {};
+            recent_speech.clear();
             applied_stream_info.clear();
             applied_settings_generation = current_settings_generation;
         }
@@ -657,10 +690,28 @@ int wmain(int argc, wchar_t** argv) {
                 translator->set_stream_info(stream_info);
                 applied_stream_info = stream_info;
                 std::printf("Stream context: %s\n", stream_info.c_str());
+                stt_names = first_characters(context->channel + " " + context->category + " " + context->title,
+                                             MAX_STT_NAME_CHARACTERS);
             }
         }
 
         const std::string& text = speech.text;
+
+        // 다음 발화를 인식할 때 맥락으로 쓰도록 이 발화를 기억해 둔다.
+        // 이름을 한 번 맞게 인식하면 뒤에서도 같은 표기로 적고, 앞 이야기에 맞는 낱말을 고를 확률이 올라간다.
+        if (!text.empty()) {
+            recent_speech.push_back(text);
+            if (recent_speech.size() > MAX_STT_RECENT_LINES) {
+                recent_speech.pop_front();
+            }
+        }
+        std::string recent;
+        for (const std::string& line : recent_speech) {
+            recent += (recent.empty() ? "" : " ") + line;
+        }
+        if (options.stt_context) {
+            recognizer.set_context(stt_names, last_characters(recent, MAX_STT_RECENT_CHARACTERS));
+        }
 
         const auto translation_started_at = Clock::now();
 

@@ -36,6 +36,12 @@ public:
 
     bool init(const std::filesystem::path& model_path, const SttConfig& config);
 
+    // 인식할 때 함께 알려 줄 맥락을 정한다. (UTF-8, 비우면 제거)
+    // names에는 방송 제목이나 채널 이름처럼 이 방송에 나오는 이름과 용어를, recent에는 직전에 인식한 말을 넣는다.
+    // 앞에서 무슨 이야기를 했는지 알면 같은 소리의 다른 낱말 중 맞는 것을 고르고, 이름을 같은 표기로 적을 확률이 올라간다.
+    // 다른 스레드에서 transcribe를 하는 중에 불러도 된다.
+    void set_context(std::string names, std::string recent);
+
     // 다음 발화부터 사용할 인식 언어를 바꾼다. 인식 중 호출해도 안전하다.
     void set_language(std::string language);
 
