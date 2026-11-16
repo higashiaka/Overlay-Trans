@@ -9,6 +9,7 @@ add_library(overlay_core STATIC
     inference/voice_matcher.cpp
     inference/speech_recognizer.cpp
     inference/translation_prompt.cpp
+    inference/translation_worker.cpp
     inference/translator.cpp
     inference/whisper_log.cpp
     server/pairing_token.cpp

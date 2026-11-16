@@ -200,7 +200,9 @@ void SubtitleServer::Impl::handle_settings(const httplib::Request& request, http
     TranslationSettings settings = config.get_settings();
     settings.source_language = read_text(body, "source_language", 8);
     settings.target_language = read_text(body, "target_language", 16);
-    settings.translator = read_text(body, "translator", 8);
+    settings.translator = read_text(body, "translator", 16);
+    if (body.contains("codex_model")) settings.codex_model = read_text(body, "codex_model", 128);
+    if (body.contains("claude_model")) settings.claude_model = read_text(body, "claude_model", 128);
     if (body.contains("deepl_key")) {
         settings.deepl_key = read_text(body, "deepl_key", 256);
     }
@@ -209,11 +211,23 @@ void SubtitleServer::Impl::handle_settings(const httplib::Request& request, http
     const bool valid_target = settings.target_language == "Korean" || settings.target_language == "English" ||
                               settings.target_language == "Japanese";
     const bool valid_translator = settings.translator == "local" || settings.translator == "deepl" ||
-                                  settings.translator == "hybrid" || settings.translator == "compare";
+                                  settings.translator == "hybrid" || settings.translator == "compare" ||
+                                  settings.translator == "codex" || settings.translator == "claude" ||
+                                  settings.translator == "codex-hybrid";
+    const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid" ||
+                            settings.translator == "compare" || settings.translator == "codex-hybrid";
     if (!valid_source || !valid_target || !valid_translator ||
-        (settings.translator != "local" && settings.deepl_key.empty() && !settings.has_deepl_key)) {
+        (uses_deepl && settings.deepl_key.empty() && !settings.has_deepl_key)) {
         response.status = 400;
         return;
+    }
+    if (settings.translator == "codex" || settings.translator == "claude" || settings.translator == "codex-hybrid") {
+        const std::string provider = settings.translator == "claude" ? "claude" : "codex";
+        if (!config.get_cli_status || !config.get_cli_status(provider).logged_in) {
+            response.status = 409;
+            response.set_content(R"({"error":"cli_not_ready"})", JSON_TYPE);
+            return;
+        }
     }
     if (!config.save_settings(settings)) {
         response.status = 500;
@@ -244,11 +258,29 @@ bool SubtitleServer::start(const ServerConfig& config) {
         response.set_content(nlohmann::json{{"source_language", settings.source_language},
                                             {"target_language", settings.target_language},
                                             {"translator", settings.translator},
-                                            {"has_deepl_key", settings.has_deepl_key}}.dump(), JSON_TYPE);
+                                            {"has_deepl_key", settings.has_deepl_key},
+                                            {"codex_model", settings.codex_model},
+                                            {"claude_model", settings.claude_model}}.dump(), JSON_TYPE);
     });
     impl_->server.Post("/v1/settings", [this](const httplib::Request& request, httplib::Response& response) {
         impl_->handle_settings(request, response);
     });
+    impl_->server.Get(R"(/v1/cli/(codex|claude))", [this](const httplib::Request& request, httplib::Response& response) {
+        if (!impl_->config.get_cli_status) { response.status = 404; return; }
+        const auto status = impl_->config.get_cli_status(request.matches[1].str());
+        response.set_content(nlohmann::json{{"installed", status.installed}, {"logged_in", status.logged_in},
+                                            {"connecting", status.connecting}, {"message", status.message}}.dump(), JSON_TYPE);
+    });
+    impl_->server.Post(R"(/v1/cli/(codex|claude)/connect)",
+        [this](const httplib::Request& request, httplib::Response& response) {
+            if (!impl_->config.connect_cli) { response.status = 404; return; }
+            if (!impl_->config.connect_cli(request.matches[1].str())) {
+                response.status = 500;
+                response.set_content(R"({"error":"cli_connect_failed"})", JSON_TYPE);
+                return;
+            }
+            response.set_content(R"({"ok":true})", JSON_TYPE);
+        });
     impl_->server.Get("/v1/subtitles", [this](const httplib::Request& request, httplib::Response& response) {
         impl_->handle_subtitles(request, response);
     });

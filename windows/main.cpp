@@ -7,9 +7,11 @@
 #include "inference/drafted_translator.h"
 #include "inference/hardware_profile.h"
 #include "inference/recognition_worker.h"
+#include "inference/translation_worker.h"
 #include "inference/voice_matcher.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
+#include "inference/cli_translator.h"
 #include "net/winhttp_client.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
@@ -65,10 +67,12 @@ struct Options {
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
-    // 번역 방식. local(로컬 모델), deepl(DeepL API, DEEPL_API_KEY), hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
+    // local, deepl, hybrid, compare, codex(GPT CLI), claude(Claude Code)
     std::string translator = "local";
     std::string target_language = "Korean";
     std::string deepl_key;
+    std::string codex_model;
+    std::string claude_model;
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
@@ -145,6 +149,10 @@ Options parse_options(int argc, wchar_t** argv) {
             options.early_stt = value != L"off";
         } else if (name == L"--translator") {
             options.translator = to_utf8(value);
+        } else if (name == L"--codex-model") {
+            options.codex_model = to_utf8(value);
+        } else if (name == L"--claude-model") {
+            options.claude_model = to_utf8(value);
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -209,8 +217,12 @@ bool read_text_file(const std::filesystem::path& path, std::string& text) {
 }
 
 std::unique_ptr<Translator> create_translator(const Options& options, TranslatorConfig config) {
+    if (options.translator == "codex" || options.translator == "claude") {
+        return std::make_unique<CliTranslator>(options.translator,
+            options.translator == "codex" ? options.codex_model : options.claude_model, std::move(config));
+    }
     const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid" ||
-                            options.translator == "compare";
+                            options.translator == "compare" || options.translator == "codex-hybrid";
     DeepLTranslatorConfig deepl_config;
     if (uses_deepl) {
         deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
@@ -226,6 +238,12 @@ std::unique_ptr<Translator> create_translator(const Options& options, Translator
     }
     if (options.translator == "deepl") {
         return std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config);
+    }
+    if (options.translator == "codex-hybrid") {
+        config.reference_drafts = true;
+        return std::make_unique<DraftedTranslator>(
+            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config),
+            std::make_unique<CliTranslator>("codex", options.codex_model, config), config.target_language, true);
     }
     if (options.translator == "hybrid" || options.translator == "compare") {
         config.reference_drafts = true;
@@ -501,6 +519,8 @@ int wmain(int argc, wchar_t** argv) {
         options.target_language = saved_settings.target_language;
         options.translator = saved_settings.translator;
         options.deepl_key = saved_settings.deepl_key;
+        options.codex_model = saved_settings.codex_model;
+        options.claude_model = saved_settings.claude_model;
     }
     const CaptureConfig config;
     VadConfig vad_config;
@@ -552,10 +572,13 @@ int wmain(int argc, wchar_t** argv) {
     pending_settings.source_language = options.language;
     pending_settings.target_language = options.target_language;
     pending_settings.translator = options.translator;
+    pending_settings.codex_model = options.codex_model;
+    pending_settings.claude_model = options.claude_model;
     if (pending_settings.deepl_key.empty()) pending_settings.deepl_key = read_environment_variable("DEEPL_API_KEY");
     pending_settings.has_deepl_key = !pending_settings.deepl_key.empty();
     std::atomic<uint64_t> settings_generation{0};
 
+    CliAccounts cli_accounts;
     SubtitleServer server;
     const ServerConfig server_config{
         .port = options.port,
@@ -616,9 +639,12 @@ int wmain(int argc, wchar_t** argv) {
             }
             std::lock_guard lock(settings_mutex);
             const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid" ||
-                                    settings.translator == "compare";
+                                    settings.translator == "compare" || settings.translator == "codex-hybrid";
             const bool rebuild = settings.translator != previous.translator ||
                                  settings.target_language != previous.target_language ||
+                                 ((settings.translator == "codex" || settings.translator == "codex-hybrid") &&
+                                  settings.codex_model != previous.codex_model) ||
+                                 (settings.translator == "claude" && settings.claude_model != previous.claude_model) ||
                                  (uses_deepl && (settings.source_language != previous.source_language ||
                                                  settings.deepl_key != previous.deepl_key));
             const bool retarget_local = settings.translator == "local" && previous.translator == "local" &&
@@ -630,6 +656,8 @@ int wmain(int argc, wchar_t** argv) {
                 requested.target_language = settings.target_language;
                 requested.translator = settings.translator;
                 requested.deepl_key = settings.deepl_key;
+                requested.codex_model = settings.codex_model;
+                requested.claude_model = settings.claude_model;
                 TranslatorConfig requested_config = translator_config;
                 requested_config.target_language = settings.target_language;
                 replacement = create_translator(requested, requested_config);
@@ -650,6 +678,8 @@ int wmain(int argc, wchar_t** argv) {
             settings_generation.fetch_add(1, std::memory_order_release);
             return true;
         },
+        .get_cli_status = [&](const std::string& provider) { return cli_accounts.status(provider); },
+        .connect_cli = [&](const std::string& provider) { return cli_accounts.connect(provider); },
     };
     if (token.empty() || !server.start(server_config)) {
         std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);
@@ -672,7 +702,7 @@ int wmain(int argc, wchar_t** argv) {
     std::string stt_names;
     std::deque<std::string> recent_speech;
     uint64_t applied_settings_generation = 0;
-    RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
+    const auto translate_speech = [&](const RecognizedSpeech& speech) {
         std::lock_guard settings_lock(settings_mutex);
         const uint64_t current_settings_generation = settings_generation.load(std::memory_order_acquire);
         if (applied_settings_generation != current_settings_generation) {
@@ -815,6 +845,7 @@ int wmain(int argc, wchar_t** argv) {
         if (speech.silence_before_ms != SpeechSegment::NO_PREVIOUS_SEGMENT) {
             std::printf(" | gap %u ms", speech.silence_before_ms);
         }
+        if (speech.batched_segments > 1) std::printf(" | batch %zu", speech.batched_segments);
         if (merges) {
             std::printf(" | merged %zu", sentence.fragment_count);
         } else if (continues) {
@@ -840,6 +871,19 @@ int wmain(int argc, wchar_t** argv) {
             sentence.translation = translation;
             sentence.subtitle = server.publish({sentence.source, translation, sentence.subtitle});
         }
+    };
+    TranslationWorker translations(translate_speech);
+    RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
+        if (!is_live) { translate_speech(speech); return; }
+        bool cli;
+        {
+            std::lock_guard lock(settings_view_mutex);
+            cli = pending_settings.translator == "codex" || pending_settings.translator == "claude" ||
+                  pending_settings.translator == "codex-hybrid";
+        }
+        // 화자 비교를 켰으면 개별 구간의 목소리를 유지한다.
+        translations.set_batching(cli && !options.voice_match);
+        translations.submit(speech);
     });
 
     VadSegmenter vad;
@@ -858,6 +902,7 @@ int wmain(int argc, wchar_t** argv) {
         return run_file(options, config, vad, worker);
     }
     const int result = run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    translations.stop();
     // 캡처와 WAV 저장은 run_live에서 끝냈다. Debug 인식 커널이 긴 연산 중이면
     // 작업 스레드 소멸자가 끝날 때까지 기다리므로, 사용자 종료 요청은 여기서 마친다.
     std::fflush(nullptr);
