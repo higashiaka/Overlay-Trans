@@ -451,7 +451,7 @@ $ powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build
 $ powershell -ExecutionPolicy Bypass -File installer/make-installer.ps1
 
 # 릴리즈에 올리기 전에 시험할 때는 내려받는 대신 로컬 패키지를 지정
-$ build/installer/OverlayTrans-Setup-1.3.0.exe /PACKAGE=C:\path\OverlayTrans-1.3.0-arm64-cpu.zip
+$ build/installer/OverlayTrans-Setup-1.3.1.exe /PACKAGE=C:\path\OverlayTrans-1.3.1-arm64-cpu.zip
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)
