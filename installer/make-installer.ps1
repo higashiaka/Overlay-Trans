@@ -32,6 +32,7 @@ $version = $Matches[1]
 # 설치 프로그램(installer/OverlayTrans.iss)이 아는 패키지와, 그 SHA-256을 넘길 이름.
 $packages = @{
     "x64-vulkan" = "Sha256X64Vulkan"
+    "x64-cpu"    = "Sha256X64Cpu"
     "arm64-cpu"  = "Sha256Arm64Cpu"
 }
 $defines = @("/DAppVersion=$version")

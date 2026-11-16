@@ -47,11 +47,24 @@ void DraftedTranslator::set_stream_info(const std::string& info) {
     translator_->set_stream_info(info);
 }
 
+void DraftedTranslator::set_compare_mode(bool enabled) {
+    compare_mode_.store(enabled, std::memory_order_relaxed);
+}
+
 std::string DraftedTranslator::translate(std::string_view text, std::span<const std::string> chat,
                                          bool replace_previous, const PartialCallback& on_partial) {
+    const bool compare_mode = compare_mode_.load(std::memory_order_relaxed);
     // 초안은 중간 결과 없이 한 번에 받는다. 자막에는 로컬 모델이 만드는 번역문만 보낸다.
     const std::string draft = draft_source_->translate(text, {}, replace_previous, {});
-    std::string translation = translator_->translate(text, chat, replace_previous, on_partial, draft);
+    const std::string comparison_prefix = "DeepL: " + (draft.empty() ? std::string("[연결 실패]") : draft) +
+                                          "\nHybrid: ";
+    PartialCallback hybrid_partial = on_partial;
+    if (compare_mode && on_partial) {
+        hybrid_partial = [&, comparison_prefix](std::string_view partial) {
+            on_partial(comparison_prefix + std::string(partial));
+        };
+    }
+    std::string translation = translator_->translate(text, chat, replace_previous, hybrid_partial, draft);
 
     // 초안보다 눈에 띄게 짧으면 빠뜨린 부분이 있고, 지나치게 길면 같은 말을 되풀이하고 있는 것이므로 초안을 쓴다.
     // 초안은 딱딱해도 빠뜨리거나 되풀이하지 않는다.
@@ -66,7 +79,8 @@ std::string DraftedTranslator::translate(std::string_view text, std::span<const 
         }
     }
     // 초안의 존댓말을 모델이 따라 쓰는 경우가 있어 최종 번역문도 반말로 맞춘다.
-    return target_language_ == "Korean" ? to_casual_korean(translation) : translation;
+    const std::string final_translation = target_language_ == "Korean" ? to_casual_korean(translation) : translation;
+    return compare_mode ? comparison_prefix + final_translation : final_translation;
 }
 
 }  // namespace overlay_trans

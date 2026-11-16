@@ -1,5 +1,5 @@
 body {
-  width: 300px;
+  width: 340px;
   margin: 0;
   padding: 14px;
   font: 13px/1.5 system-ui, "Malgun Gothic", sans-serif;
@@ -10,6 +10,10 @@ h1 {
   margin: 0 0 8px;
   font-size: 15px;
 }
+
+h2 { margin: 0 0 5px; font-size: 13px; }
+section { padding: 12px 0; border-top: 1px solid #ddd; }
+section:first-of-type { border-top: 0; }
 
 label {
   display: block;
@@ -23,7 +27,7 @@ label {
   margin-top: 4px;
 }
 
-input[type="text"] {
+input[type="text"], input[type="password"], select {
   flex: 1;
   min-width: 0;
   padding: 5px 7px;
@@ -32,6 +36,10 @@ input[type="text"] {
   font: inherit;
   font-family: Consolas, monospace;
 }
+
+input[type="password"], select { box-sizing: border-box; width: 100%; margin-top: 4px; }
+#save-settings { margin-top: 12px; }
+[hidden] { display: none !important; }
 
 button {
   padding: 5px 12px;

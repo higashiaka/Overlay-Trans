@@ -376,6 +376,13 @@ void LlamaTranslator::set_stream_info(const std::string& info) {
     impl_->forget_old_lines();
 }
 
+void LlamaTranslator::set_target_language(std::string language, const std::string& stream_info) {
+    impl_->config.target_language = std::move(language);
+    impl_->history.clear();
+    impl_->system_prompt = build_system_prompt(impl_->config, stream_info);
+    impl_->forget_old_lines();
+}
+
 std::string LlamaTranslator::translate(std::string_view text, std::span<const std::string> chat,
                                        bool replace_previous, const PartialCallback& on_partial) {
     return translate(text, chat, replace_previous, on_partial, {});

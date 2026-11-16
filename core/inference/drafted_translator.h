@@ -2,6 +2,7 @@
 
 #include "inference/translator.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -19,6 +20,7 @@ public:
     ~DraftedTranslator() override;
 
     void set_stream_info(const std::string& info) override;
+    void set_compare_mode(bool enabled);
     std::string translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
                           const PartialCallback& on_partial) override;
 
@@ -26,6 +28,7 @@ private:
     std::unique_ptr<Translator> draft_source_;
     std::unique_ptr<LlamaTranslator> translator_;
     std::string target_language_;
+    std::atomic<bool> compare_mode_{false};
 };
 
 }  // namespace overlay_trans

@@ -7,23 +7,51 @@
   </head>
   <body>
     <h1>OverLay-Trans</h1>
-
-    <p id="status" class="status">상태 확인 중…</p>
-
-    <label for="code">페어링 코드</label>
-    <div class="row">
-      <input id="code" type="text" placeholder="47815-XXXXXXXXXXXXXXXX" autocomplete="off" spellcheck="false" />
-      <button id="pair" type="button">연결</button>
-    </div>
-    <p class="hint">OverLay-Trans 앱을 실행하면 표시되는 코드를 입력하세요. 한 번만 입력하면 됩니다.</p>
-    <p id="result" class="result" role="status"></p>
-
-    <label class="checkbox">
-      <input id="show-source" type="checkbox" />
-      원문도 함께 표시
-    </label>
-
-    <p id="diagnostics" class="hint"></p>
+    <p id="status" class="status">연결 상태 확인 중…</p>
+    <section>
+      <h2>1. 앱 연결</h2>
+      <p class="hint">Windows 앱을 실행하고 트레이 아이콘을 우클릭해 페어링 코드를 복사하세요.</p>
+      <label for="code">페어링 코드</label>
+      <div class="row">
+        <input id="code" type="text" placeholder="47815-XXXXXXXXXXXXXXXX" autocomplete="off" spellcheck="false" />
+        <button id="pair" type="button">연결</button>
+      </div>
+      <p id="result" class="result" role="status"></p>
+    </section>
+    <section>
+      <h2>2. 번역 설정</h2>
+      <label for="source-language">원본 음성 언어</label>
+      <select id="source-language">
+        <option value="auto">자동 감지</option><option value="ja">일본어</option>
+        <option value="en">영어</option><option value="ko">한국어</option>
+      </select>
+      <label for="target-language">번역 언어</label>
+      <select id="target-language">
+        <option value="Korean">한국어</option><option value="English">영어</option>
+        <option value="Japanese">일본어</option>
+      </select>
+      <label for="translator">번역 방식</label>
+      <select id="translator">
+        <option value="local">기기 내 번역 (API 키 불필요)</option>
+        <option value="deepl">DeepL API</option>
+        <option value="hybrid">DeepL 초안 + 기기 내 번역</option>
+        <option value="compare">실시간 비교 (DeepL / 하이브리드)</option>
+      </select>
+      <div id="deepl-fields" hidden>
+        <label for="deepl-key">DeepL API 키</label>
+        <input id="deepl-key" type="password" autocomplete="off" placeholder="새 키 입력 또는 기존 키 유지" />
+        <p id="key-status" class="hint"></p>
+        <p class="hint">DeepL 계정에서 발급한 개인 API 키를 입력하세요. 사용량은 본인 계정에 청구될 수 있습니다.</p>
+      </div>
+      <button id="save-settings" type="button">설정 저장</button>
+      <p id="settings-result" class="result" role="status"></p>
+    </section>
+    <section>
+      <h2>3. 자막 보기</h2>
+      <p class="hint">Twitch 또는 YouTube 영상을 재생하세요. 번역 설정은 저장 후 다음 발화부터 적용됩니다.</p>
+      <label class="checkbox"><input id="show-source" type="checkbox" /> 원문도 함께 표시</label>
+      <p id="diagnostics" class="hint"></p>
+    </section>
 
     <script src="popup.js"></script>
   </body>

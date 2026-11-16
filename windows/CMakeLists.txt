@@ -1,5 +1,6 @@
 add_executable(OverlayTransWin
     main.cpp
+    translation_settings.cpp
     capture/audio_file_reader.cpp
     capture/loopback_capture.cpp
     net/winhttp_client.cpp
@@ -13,12 +14,14 @@ target_compile_definitions(OverlayTransWin PRIVATE
 )
 target_link_libraries(OverlayTransWin PRIVATE
     overlay_core
+    overlay_httplib
     overlay_miniaudio
     # Media Foundation (오디오 파일 디코딩)
     mfplat
     mfreadwrite
     mfuuid
     ole32
+    crypt32
     # 로컬 앱 데이터 폴더 조회, 알림 영역 아이콘
     shell32
     user32

@@ -4,6 +4,7 @@ add_library(overlay_core STATIC
     audio/wav_writer.cpp
     inference/deepl_translator.cpp
     inference/drafted_translator.cpp
+    inference/hardware_profile.cpp
     inference/recognition_worker.cpp
     inference/voice_matcher.cpp
     inference/speech_recognizer.cpp
