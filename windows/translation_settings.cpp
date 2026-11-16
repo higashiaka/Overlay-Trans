@@ -60,6 +60,8 @@ TranslationSettings load_translation_settings() {
     settings.source_language = body.value("source_language", "auto");
     settings.target_language = body.value("target_language", "Korean");
     settings.translator = body.value("translator", "local");
+    settings.codex_model = body.value("codex_model", "");
+    settings.claude_model = body.value("claude_model", "");
     auto encrypted = hex_decode(body.value("deepl_key_protected", ""));
     if (!encrypted.empty()) {
         DATA_BLOB input{static_cast<DWORD>(encrypted.size()), encrypted.data()};
@@ -81,7 +83,8 @@ bool save_translation_settings(const TranslationSettings& settings) {
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) return false;
     nlohmann::json body{{"source_language", settings.source_language},
-                        {"target_language", settings.target_language}, {"translator", settings.translator}};
+                        {"target_language", settings.target_language}, {"translator", settings.translator},
+                        {"codex_model", settings.codex_model}, {"claude_model", settings.claude_model}};
     if (!settings.deepl_key.empty()) {
         DATA_BLOB input{static_cast<DWORD>(settings.deepl_key.size()),
                         reinterpret_cast<BYTE*>(const_cast<char*>(settings.deepl_key.data()))};

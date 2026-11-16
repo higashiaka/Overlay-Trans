@@ -37,8 +37,9 @@ size_t content_length(std::string_view text) {
 }  // namespace
 
 DraftedTranslator::DraftedTranslator(std::unique_ptr<Translator> draft_source,
-                                     std::unique_ptr<LlamaTranslator> translator, const std::string& target_language)
-    : draft_source_(std::move(draft_source)), translator_(std::move(translator)), target_language_(target_language) {}
+                                     std::unique_ptr<Translator> translator, const std::string& target_language, bool preview_draft)
+    : draft_source_(std::move(draft_source)), translator_(std::move(translator)), target_language_(target_language),
+      preview_draft_(preview_draft) {}
 
 DraftedTranslator::~DraftedTranslator() = default;
 
@@ -54,24 +55,30 @@ void DraftedTranslator::set_compare_mode(bool enabled) {
 std::string DraftedTranslator::translate(std::string_view text, std::span<const std::string> chat,
                                          bool replace_previous, const PartialCallback& on_partial) {
     const bool compare_mode = compare_mode_.load(std::memory_order_relaxed);
-    // 초안은 중간 결과 없이 한 번에 받는다. 자막에는 로컬 모델이 만드는 번역문만 보낸다.
+    // CLI 보정 모드에서는 초안을 먼저 보여 주고, 완성된 보정문으로 교체한다.
     const std::string draft = draft_source_->translate(text, {}, replace_previous, {});
     const std::string comparison_prefix = "DeepL: " + (draft.empty() ? std::string("[연결 실패]") : draft) +
                                           "\nHybrid: ";
     PartialCallback hybrid_partial = on_partial;
+    if (preview_draft_ && !compare_mode && on_partial && !draft.empty()) {
+        on_partial(draft);
+        // 짧은 토큰마다 전체 초안을 지웠다 다시 그리지 않도록 보정 완료까지 초안을 유지한다.
+        hybrid_partial = {};
+    }
     if (compare_mode && on_partial) {
         hybrid_partial = [&, comparison_prefix](std::string_view partial) {
             on_partial(comparison_prefix + std::string(partial));
         };
     }
-    std::string translation = translator_->translate(text, chat, replace_previous, hybrid_partial, draft);
+    std::string translation = translator_->translate_with_draft(text, chat, replace_previous, hybrid_partial, draft);
 
     // 초안보다 눈에 띄게 짧으면 빠뜨린 부분이 있고, 지나치게 길면 같은 말을 되풀이하고 있는 것이므로 초안을 쓴다.
     // 초안은 딱딱해도 빠뜨리거나 되풀이하지 않는다.
     const auto draft_length = static_cast<double>(content_length(draft));
     const auto translation_length = static_cast<double>(content_length(translation));
     if (!draft.empty()) {
-        const bool dropped = draft_length >= MIN_DRAFT_LENGTH && translation_length < MIN_LENGTH_RATIO * draft_length;
+        const bool dropped = translation.empty() ||
+            (draft_length >= MIN_DRAFT_LENGTH && translation_length < MIN_LENGTH_RATIO * draft_length);
         const bool repeating =
             translation_length > MAX_LENGTH_RATIO * std::max(draft_length, static_cast<double>(MIN_DRAFT_LENGTH));
         if (dropped || repeating) {

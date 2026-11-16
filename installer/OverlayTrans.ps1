@@ -96,6 +96,26 @@ if (Test-Path $profileScript) {
     }
 }
 
+# CLI나 DeepL로 번역할 때는 기기 내 번역 모델을 내려받지 않는다.
+# Windows 앱과 마찬가지로 저장된 설정이 options.txt보다 우선한다.
+$translator = 'local'
+$translatorOption = [array]::IndexOf($arguments, '--translator')
+if ($translatorOption -ge 0 -and $translatorOption + 1 -lt $arguments.Count) {
+    $translator = $arguments[$translatorOption + 1]
+}
+$settingsFile = Join-Path $env:LOCALAPPDATA 'OverlayTrans/translation-settings.json'
+if (Test-Path -LiteralPath $settingsFile) {
+    try {
+        $savedSettings = Get-Content -LiteralPath $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($savedSettings.translator) { $translator = $savedSettings.translator }
+    } catch {
+        # 읽지 못하면 기본 모델을 준비한다.
+    }
+}
+if ($translator -in @('codex', 'claude', 'deepl', 'codex-hybrid')) {
+    $modelFiles = @($modelFiles | Where-Object { $_.Name -ne 'gemma-3-4b-it-Q4_K_M.gguf' })
+}
+
 # 음성 인식 모델. options.txt에 --stt-model이 있으면 그 파일을, 없으면 기본 모델을 쓴다.
 # whisper.cpp가 배포하는 모델(ggml-*.bin)이면 없을 때 내려받는다. 그 밖의 파일은 사용자가 직접 넣어 둔 것으로 본다.
 $sttPath = Join-Path $models $defaultSttModel
