@@ -33,6 +33,7 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 | VAD | Silero VAD | whisper.cpp 내장 VAD 사용 (발화 구간 검출) |
 | STT Engine | whisper.cpp | 온디바이스 음성 인식 |
 | LLM Engine | llama.cpp | GGUF 경량 모델 기반 문맥 번역 |
+| 번역 API (선택) | DeepL API (WinHTTP) | `--translator hybrid`로 켜면 DeepL 번역을 참고해 로컬 모델이 번역. `deepl`은 DeepL만으로 번역. 기본은 로컬 번역 |
 | 목소리 비교 | sherpa-onnx | 앞뒤 발화의 목소리 특징(3D-Speaker CAM++)을 비교해 다른 사람의 말은 합치지 않음. 빌드할 때 공식 배포 바이너리를 내려받음 |
 | GPU 가속 | Vulkan (`ggml-vulkan`) | Radeon(x86_64) 데스크톱 GPU 백엔드. STT/LLM을 CPU와 GPU 중 어디에 둘지는 벤치마크로 결정 |
 | Audio Capture | miniaudio (WASAPI) | Windows 루프백 캡처 (16kHz 모노) |
@@ -98,13 +99,16 @@ Windows x64 온디바이스 구동을 기준으로 한 기술 스택입니다. �
 .
 ├── core/                          # [C++] 플랫폼 독립적인 핵심 엔진
 │   ├── audio/                     # 오디오 버퍼링 및 VAD 알고리즘 구현체
-│   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스
+│   ├── inference/                 # whisper.cpp 및 llama.cpp 래핑 클래스, 번역 API 클라이언트
+│   ├── net/                       # HTTPS 요청 인터페이스 (구현은 플랫폼별 쉘에 둠)
 │   ├── server/                    # 브라우저 확장 프로그램과 통신하는 로컬 서버
-│   ├── text/                      # 번역 결과 후처리 (가타카나 표기, 글자 종류 판별)
+│   ├── text/                      # 번역 결과 후처리 (가타카나 표기, 글자 종류 판별, 존댓말을 반말로)
 │   └── models/                    # GGUF 양자화 모델 파일 보관 (gitignore)
 ├── windows/                       # [Windows] 데스크톱 쉘
 │   ├── capture/                   # WASAPI 루프백 캡처 (miniaudio), 오디오 파일 입력
+│   ├── net/                       # WinHTTP로 구현한 HTTPS 요청
 │   └── main.cpp                   # 윈도우 실행 진입점
+├── glossary/                      # 번역 용어집 (방송에서 자주 나오는 속어와 신조어)
 ├── extension/                     # [브라우저] 영상 위에 자막을 표시하는 확장 프로그램
 │   ├── background.js              # 앱의 로컬 서버에서 자막을 받아 페이지로 전달
 │   ├── content/                   # 자막 표시 (sites/ 아래에 사이트별 화면 구조 코드)
@@ -189,21 +193,23 @@ $ git config commit.template .gitmessage
 
 ### 설치 프로그램으로 설치 (Windows x64, ARM64)
 
-1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 설치 프로그램이 PC의 프로세서를 확인해 맞는 앱을 내려받으므로 인터넷 연결이 필요합니다. 관리자 권한 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치됩니다.
-2. 바탕 화면의 OverLay-Trans를 실행합니다. 처음 실행할 때 모델(약 3GB)을 내려받습니다. 중간에 끊겨도 다시 실행하면 이어서 받습니다.
+1. [Releases](https://github.com/higashiaka/Overlay-Trans/releases)에서 `OverlayTrans-Setup-<버전>.exe`를 받아 실행합니다. 설치 프로그램이 PC의 프로세서와 그래픽 환경에 맞는 앱을 내려받아 사용자 폴더(`%LOCALAPPDATA%\Programs\OverlayTrans`)에 설치합니다. 관리자 권한은 필요하지 않습니다.
+2. 설치가 끝나면 앱이 자동으로 시작되며 필요한 모델을 내려받습니다. 인터넷 연결이 필요하고, 중간에 끊겨도 바탕 화면의 OverLay-Trans를 다시 실행하면 이어서 받습니다.
 3. 준비가 끝나면 창이 숨겨지고 알림 영역(시계 옆)에 아이콘이 생깁니다. 아이콘을 오른쪽 클릭해 "페어링 코드 복사"를 누른 뒤, 아래 [브라우저 확장 프로그램](#브라우저-확장-프로그램-트위치-유튜브)의 순서대로 확장 프로그램을 연결합니다. 확장 프로그램은 설치 폴더의 `extension` 폴더에 있습니다.
 4. 아이콘 메뉴에서 로그 창을 보거나 앱을 종료할 수 있습니다.
 
-설치 프로그램이 고르는 앱은 프로세서에 따라 다릅니다.
+설치 프로그램이 고르는 앱과 첫 실행 기본값은 PC 환경에 따라 다릅니다. 그래픽 메모리와 GPU 사용 가능 여부는 앱에서도 다시 확인하며, `options.txt`에 직접 적은 값이 우선합니다.
 
 | 프로세서 | 받는 앱 | 음성 인식 | 번역 |
 | --- | --- | --- | --- |
-| x64 (AMD, Intel) | Vulkan 빌드 | large-v3-turbo, GPU | Gemma 3 4B, GPU |
+| x64, Vulkan GPU 6GB 이상 | Vulkan 빌드 | large-v3-turbo, GPU | Gemma 3 4B, GPU 일부 |
+| x64, Vulkan GPU 2~6GB | Vulkan 빌드 | small, GPU | Gemma 3 4B, 여유 메모리에 따라 GPU 일부 또는 CPU |
+| x64, Vulkan GPU 없음 | CPU 빌드 | base, CPU | Gemma 3 4B, CPU |
 | ARM64 (스냅드래곤 X) | CPU 빌드 | small, CPU | Gemma 3 4B, CPU |
 
-- x64는 Vulkan을 지원하는 그래픽 드라이버가 필요합니다. (최근의 AMD, NVIDIA, Intel 드라이버에 포함)
+- Vulkan 패키지는 그래픽 드라이버와 그래픽 메모리가 확인될 때만 선택합니다. 앱에서 GPU를 사용할 수 없으면 CPU 설정으로 실행합니다.
 - 스냅드래곤 X는 GPU를 쓰지 않습니다. Adreno GPU로는 CPU보다 느렸습니다. ([측정 결과](#측정-결과-snapdragon-x-x1-26-100-8코어--adreno-x1-45-전원-연결))
-- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본으로 `--language ja`가 들어 있고, x64에는 `--llm-gpu-layers 16`(VRAM 8GB 기준), ARM64에는 `--stt-model models\ggml-small.bin`이 더 들어 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
+- 실행 옵션은 설치 폴더의 `options.txt`에 한 줄에 하나씩 적습니다. 기본 원본 언어는 자동 감지이며 확장 프로그램에서 바꿀 수 있습니다. 창을 숨기지 않으려면 `--background off`를 적습니다.
 - 음성 인식 모델을 바꾸려면 `--stt-model models\ggml-base.bin`처럼 whisper.cpp 모델 이름을 적습니다. 없는 모델은 다음에 실행할 때 내려받습니다.
 - 제거는 Windows 설정의 "설치된 앱"에서 합니다. 내려받은 모델도 함께 지워집니다.
 
@@ -234,7 +240,18 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-hint "ビッツ、サブスク、ギフト"
 
 # 번역 용어집: UTF-8 텍스트 파일에 한 줄에 하나씩 "원문 = 번역" 형식으로 적음 (예: 明後日 = 모레)
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossary glossary.txt
+# glossary/ja-ko-stream.txt에 방송에서 자주 나오는 속어와 신조어(メロい, キモい, 草 등)를 모아 둠
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --glossary glossary/ja-ko-stream.txt
+
+# DeepL 번역을 초안으로 받아, 그 초안을 참고해 로컬 번역 모델로 번역 (DEEPL_API_KEY 환경 변수 필요)
+# DeepL은 낱말 뜻이 정확하지만 끊긴 말을 끊긴 대로 옮겨 읽기 어렵고, 로컬 모델은 문장을 자연스럽게 다듬지만 낱말을 틀리기 쉬움
+# 초안을 받지 못하면 로컬 모델만으로 번역하고, 로컬 모델이 원문 일부를 빠뜨리면 초안을 씀. 문장마다 약 0.4초가 더 걸림
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator hybrid --glossary glossary/ja-ko-stream.txt
+
+# 로컬 번역 모델 대신 DeepL로 번역 (인터넷 연결과 API 키 필요. DeepL API Free는 월 50만~100만 자 무료)
+# API 키는 DEEPL_API_KEY 환경 변수로 넘김. 번역문의 존댓말 어미는 반말로 바꿈
+# 로컬 번역 모델을 불러오지 않으므로 그만큼 VRAM이 남음. 용어집과 방송 정보는 쓰지 않음
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --translator deepl
 
 # 오디오/영상 파일(MP4, M4A, MP3, WAV, FLAC 등)을 재생 없이 바로 처리. 같은 파일로 모델과 설정을 반복 비교할 때 사용
 # 테스트용 파일은 sample/ 폴더에 두면 git에 포함되지 않음
@@ -243,7 +260,8 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --input 
 # 말이 잠깐 멈추면 발화가 끝났다고 확정되기 전에 인식을 미리 시작해 자막을 앞당김 (기본으로 켜짐). 끄려면 off
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --early-stt off
 
-# 끊어서 내보낸 말이 1초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
+# 끊어서 내보낸 말이 1.4초 안에 이어지면, 앞의 말과 합쳐 다시 번역해 화면의 자막을 바꿈 (기본으로 켜짐). 끄려면 off
+# 자막이 너무 길어지지 않도록 네 구간, 일본어 약 35자까지만 합침. 로그의 "gap"은 앞 구간과의 사이에 빈 시간
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --merge-sentences off
 
 # 번역문이 다 만들어지기 전에, 만들어진 부분부터 자막으로 보냄 (기본으로 켜짐). 끄려면 off
@@ -256,9 +274,10 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --stt-au
 # 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둠 (설치본은 기본으로 켜짐). 아이콘 메뉴로 다시 볼 수 있음
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --background on
 
-# 이어진 말을 합칠 때 앞뒤 목소리를 비교해, 다른 사람(게임 음성, 함께 방송하는 사람)의 말은 합치지 않음 (기본으로 켜짐)
-# 로그에 "voice 유사도"와 합치지 않은 경우 "other voice"가 표시됨. 끄려면 off
-$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --voice-match off
+# 이어진 말을 합칠 때 앞뒤 목소리를 비교해, 다른 사람(게임 음성, 함께 방송하는 사람)의 말은 합치지 않음 (기본으로 꺼짐)
+# 혼자 하는 방송에서는 같은 사람의 말도 다른 사람으로 잘못 보는 일이 많아 끔. 여러 사람이 하는 방송에서 on으로 켬
+# 로그에 "voice 유사도"와 합치지 않은 경우 "other voice"가 표시됨
+$ ./build/windows-x64/windows/Release/OverlayTransWin.exe --language ja --voice-match on
 
 # (디버깅) 캡처한 오디오를 WAV 파일로 저장
 $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
@@ -272,7 +291,13 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 2. "개발자 모드"를 켜고 "압축해제된 확장 프로그램을 로드합니다"를 눌러 `extension` 폴더를 선택합니다.
 3. 앱을 실행하고, 콘솔에 출력된 `Pairing code: ...` 값을 복사합니다. (알림 영역 아이콘 메뉴의 "페어링 코드 복사"로도 복사할 수 있습니다.)
 4. 브라우저의 확장 프로그램 아이콘을 눌러 페어링 코드를 입력하고 "연결"을 누릅니다. (한 번만 하면 됩니다.)
-5. 트위치나 유튜브에서 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
+5. 팝업의 **번역 설정**에서 원본 음성 언어와 번역 언어를 고릅니다. 기본 번역 방식은 기기 내 번역이며 API 키가 필요하지 않습니다. DeepL, DeepL 초안 또는 실시간 비교 방식을 선택했다면 자신의 DeepL API 키를 입력하고 **설정 저장**을 누릅니다.
+6. 설정을 저장하면 실행 중인 Windows 앱에 바로 전달됩니다. 새 언어와 번역 방식은 다음 발화부터 적용됩니다.
+7. 트위치나 유튜브에서 방송을 열면 영상 아래쪽에 자막이 표시됩니다. 이미 열려 있던 탭은 새로 고칩니다.
+
+DeepL API 키는 확장 프로그램 저장소에 보관하지 않습니다. 앱이 Windows 사용자 계정에 연결된 방식으로 보호해 `%LOCALAPPDATA%\OverlayTrans\translation-settings.json`에 저장합니다. 팝업에서 키를 비워 두고 다시 저장하면 기존 키가 유지됩니다. 번역 언어는 한국어, 영어, 일본어를 지원하고 원본 음성은 자동 감지 또는 일본어, 영어, 한국어로 지정할 수 있습니다.
+
+**실시간 비교**는 한 번 인식한 발화를 DeepL과 하이브리드에 함께 사용해 영상 위에 두 결과를 표시합니다. 하이브리드가 쓰는 DeepL 초안을 비교에도 재사용하므로 발화당 DeepL 요청은 한 번입니다. 기기 내 번역 모델을 불러오는 동안에는 저장에 시간이 걸릴 수 있습니다.
 
 사이트 화면 구조에 의존하는 코드는 `extension/content/sites/`에 사이트별 파일로 분리되어 있습니다.
 
@@ -285,6 +310,8 @@ $ ./build/windows-x64/windows/Release/OverlayTransWin.exe --dump-wav capture.wav
 | 요청 | 설명 |
 | --- | --- |
 | `GET /v1/ping` | 연결과 페어링 키 확인 |
+| `GET /v1/settings` | 현재 번역 설정 조회 (API 키 원문 제외) |
+| `POST /v1/settings` | 번역 설정 저장 및 실행 중인 앱에 적용 |
 | `GET /v1/subtitles?after=<번호>` | 해당 번호 이후의 자막(원문, 번역). 없으면 새 자막이 나올 때까지 최대 20초 기다림. 자막의 `replaces`가 0이 아니면 화면에 있는 그 번호의 자막을 이 자막으로 바꿈 |
 | `POST /v1/context` | 방송 정보 전달 (JSON: `channel`, `title`, `category`). 번역 지시문에 쓰임 |
 | `POST /v1/chat` | 새로 올라온 채팅 전달 (JSON: `messages[{name, text}]`). 앱을 `--chat-context on`으로 실행한 경우에만 직후 발화의 번역 맥락으로 쓰임 (기본은 꺼짐) |
@@ -401,11 +428,11 @@ $ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/model
 - 이 GPU에서는 번역을 GPU에 올려도 CPU보다 느리고, 음성 인식도 0.4초에서 1.1초로 느려집니다. CPU 빌드(`windows-arm64`)에 STT small, 번역 Gemma 3 4B 조합을 권합니다.
 ### 릴리즈 만들기
 
-`.github/workflows/release.yml`이 패키지와 설치 프로그램을 만듭니다. 패키지는 프로세서별 앱을 묶은 zip이고(`x64-vulkan`, `arm64-cpu`), 설치 프로그램은 그중 PC에 맞는 것을 릴리즈에서 내려받아 설치합니다.
+`.github/workflows/release.yml`이 패키지와 설치 프로그램을 만듭니다. 패키지는 환경별 앱을 묶은 zip이고(`x64-vulkan`, `x64-cpu`, `arm64-cpu`), 설치 프로그램은 그중 PC에 맞는 것을 릴리즈에서 내려받아 설치합니다.
 
 1. `CMakeLists.txt`의 `project(... VERSION x.y.z)`를 올리고 `dev`를 `main`에 merge합니다.
 2. `main`에 `v<버전>` 태그를 올립니다. (`git tag v1.0.0` → `git push origin v1.0.0`) 태그와 프로젝트 버전이 다르면 빌드가 실패합니다.
-3. Actions가 패키지 zip 두 개와 설치 프로그램을 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다. 공개하기 전에는 설치 프로그램이 패키지를 내려받지 못합니다.
+3. Actions가 패키지 zip 세 개와 설치 프로그램을 릴리즈 초안에 올립니다. 내용을 확인한 뒤 GitHub에서 공개합니다. 공개하기 전에는 설치 프로그램이 패키지를 내려받지 못합니다.
 
 - 설치 프로그램에는 패키지의 SHA-256이 들어 있어, 릴리즈의 zip을 나중에 바꿔 올리면 설치가 거부됩니다. zip을 고치려면 설치 프로그램도 다시 만들어야 합니다.
 - 설치 프로그램이 고르는 규칙은 `installer/OverlayTrans.iss`의 `SelectPackage`에 있습니다.
@@ -417,13 +444,14 @@ $ ./build/arm64/windows/OverlayTransWin.exe --language ja --stt-model core/model
 ```bash
 # 패키지: build/installer/OverlayTrans-<버전>-<아키텍처>-<백엔드>.zip
 $ powershell -ExecutionPolicy Bypass -File installer/package.ps1
+$ powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/windows-x64 -Arch x64 -Backend cpu
 $ powershell -ExecutionPolicy Bypass -File installer/package.ps1 -BuildDir build/arm64 -Arch arm64 -Backend cpu
 
 # 설치 프로그램: build/installer/OverlayTrans-Setup-<버전>.exe (위에서 만든 패키지만 지원)
 $ powershell -ExecutionPolicy Bypass -File installer/make-installer.ps1
 
 # 릴리즈에 올리기 전에 시험할 때는 내려받는 대신 로컬 패키지를 지정
-$ build/installer/OverlayTrans-Setup-1.2.0.exe /PACKAGE=C:\path\OverlayTrans-1.2.0-arm64-cpu.zip
+$ build/installer/OverlayTrans-Setup-1.3.1.exe /PACKAGE=C:\path\OverlayTrans-1.3.1-arm64-cpu.zip
 ```
 
 ## 9. 추후 지원 예정 (현재 범위 제외)

@@ -51,6 +51,7 @@ struct SubtitleServer::Impl {
     void handle_subtitles(const httplib::Request& request, httplib::Response& response);
     void handle_context(const httplib::Request& request, httplib::Response& response) const;
     void handle_chat(const httplib::Request& request, httplib::Response& response) const;
+    void handle_settings(const httplib::Request& request, httplib::Response& response) const;
 };
 
 namespace {
@@ -186,6 +187,41 @@ void SubtitleServer::Impl::handle_chat(const httplib::Request& request, httplib:
     response.set_content(R"({"ok":true})", JSON_TYPE);
 }
 
+void SubtitleServer::Impl::handle_settings(const httplib::Request& request, httplib::Response& response) const {
+    if (!config.save_settings || !config.get_settings || request.body.size() > 4096) {
+        response.status = 400;
+        return;
+    }
+    const auto body = nlohmann::json::parse(request.body, nullptr, false);
+    if (!body.is_object()) {
+        response.status = 400;
+        return;
+    }
+    TranslationSettings settings = config.get_settings();
+    settings.source_language = read_text(body, "source_language", 8);
+    settings.target_language = read_text(body, "target_language", 16);
+    settings.translator = read_text(body, "translator", 8);
+    if (body.contains("deepl_key")) {
+        settings.deepl_key = read_text(body, "deepl_key", 256);
+    }
+    const bool valid_source = settings.source_language == "auto" || settings.source_language == "ja" ||
+                              settings.source_language == "en" || settings.source_language == "ko";
+    const bool valid_target = settings.target_language == "Korean" || settings.target_language == "English" ||
+                              settings.target_language == "Japanese";
+    const bool valid_translator = settings.translator == "local" || settings.translator == "deepl" ||
+                                  settings.translator == "hybrid" || settings.translator == "compare";
+    if (!valid_source || !valid_target || !valid_translator ||
+        (settings.translator != "local" && settings.deepl_key.empty() && !settings.has_deepl_key)) {
+        response.status = 400;
+        return;
+    }
+    if (!config.save_settings(settings)) {
+        response.status = 500;
+        return;
+    }
+    response.set_content(R"({"ok":true,"restart_required":false})", JSON_TYPE);
+}
+
 SubtitleServer::SubtitleServer() : impl_(std::make_unique<Impl>()) {}
 
 SubtitleServer::~SubtitleServer() {
@@ -201,6 +237,17 @@ bool SubtitleServer::start(const ServerConfig& config) {
     });
     impl_->server.Get("/v1/ping", [](const httplib::Request&, httplib::Response& response) {
         response.set_content(R"({"app":"overlay-trans","version":1})", JSON_TYPE);
+    });
+    impl_->server.Get("/v1/settings", [this](const httplib::Request&, httplib::Response& response) {
+        if (!impl_->config.get_settings) { response.status = 404; return; }
+        const auto settings = impl_->config.get_settings();
+        response.set_content(nlohmann::json{{"source_language", settings.source_language},
+                                            {"target_language", settings.target_language},
+                                            {"translator", settings.translator},
+                                            {"has_deepl_key", settings.has_deepl_key}}.dump(), JSON_TYPE);
+    });
+    impl_->server.Post("/v1/settings", [this](const httplib::Request& request, httplib::Response& response) {
+        impl_->handle_settings(request, response);
     });
     impl_->server.Get("/v1/subtitles", [this](const httplib::Request& request, httplib::Response& response) {
         impl_->handle_subtitles(request, response);

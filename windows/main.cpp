@@ -3,29 +3,38 @@
 #include "audio/wav_writer.h"
 #include "capture/audio_file_reader.h"
 #include "capture/loopback_capture.h"
+#include "inference/deepl_translator.h"
+#include "inference/drafted_translator.h"
+#include "inference/hardware_profile.h"
 #include "inference/recognition_worker.h"
 #include "inference/voice_matcher.h"
 #include "inference/speech_recognizer.h"
 #include "inference/translator.h"
+#include "net/winhttp_client.h"
 #include "server/pairing_token.h"
 #include "server/subtitle_server.h"
 #include "text/script.h"
 #include "tray/tray_icon.h"
+#include "translation_settings.h"
 
 #define NOMINMAX
 #include <windows.h>
 
 #include <shlobj.h>
 
+#include <cctype>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -56,10 +65,17 @@ struct Options {
     std::filesystem::path glossary;    // 번역 용어집 파일. 비어 있으면 사용하지 않는다.
     std::string language = "auto";
     std::string stt_hint;  // STT에 미리 알려 줄 이름과 용어
+    // 번역 방식. local(로컬 모델), deepl(DeepL API, DEEPL_API_KEY), hybrid(DeepL 번역을 참고해 로컬 모델로 번역)
+    std::string translator = "local";
+    std::string target_language = "Korean";
+    std::string deepl_key;
     bool chat_context = false;  // 확장 프로그램이 보낸 채팅을 번역 맥락으로 쓸지
     bool early_stt = true;  // 발화가 끝났다고 확정되기 전에 인식을 미리 시작할지
     bool merge_sentences = true;  // 끊어서 내보낸 말이 이어지면 합쳐서 다시 번역할지
-    bool voice_match = true;  // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지
+    bool stt_context = true;  // 방송 이름과 직전에 인식한 말을 음성 인식에 맥락으로 알려 줄지
+    // 목소리가 다른 사람의 말은 앞 문장에 합치지 않을지. 혼자 하는 방송에서도 맞장구 뒤의 말이나 BGM이 바뀐 구간을
+    // 다른 사람으로 잘못 보고 합치기를 대부분 막아서(비교 8번 중 7번) 기본으로 끈다. 여러 사람이 하는 방송에서 켠다.
+    bool voice_match = false;
     bool background = false;  // 시작한 뒤 콘솔 창을 숨기고 알림 영역 아이콘으로만 둘지
     bool stream_subtitles = true;  // 번역문이 다 만들어지기 전에 만들어진 부분부터 자막으로 보낼지
     bool use_gpu = true;  // GPU 프리셋(Vulkan, OpenCL)으로 빌드한 경우에만 효과가 있다.
@@ -114,7 +130,7 @@ Options parse_options(int argc, wchar_t** argv) {
         } else if (name == L"--chat-context") {
             options.chat_context = value == L"on";
         } else if (name == L"--voice-match") {
-            options.voice_match = value != L"off";
+            options.voice_match = value == L"on";
         } else if (name == L"--voice-model") {
             options.voice_model = value;
         } else if (name == L"--background") {
@@ -123,8 +139,12 @@ Options parse_options(int argc, wchar_t** argv) {
             options.stream_subtitles = value != L"off";
         } else if (name == L"--merge-sentences") {
             options.merge_sentences = value != L"off";
+        } else if (name == L"--stt-context") {
+            options.stt_context = value != L"off";
         } else if (name == L"--early-stt") {
             options.early_stt = value != L"off";
+        } else if (name == L"--translator") {
+            options.translator = to_utf8(value);
         } else if (name == L"--stt-hint") {
             options.stt_hint = to_utf8(value);
         } else if (name == L"--device") {
@@ -167,6 +187,17 @@ std::filesystem::path pairing_token_path() {
     return folder / "OverlayTrans" / "pairing-token.txt";
 }
 
+// 환경 변수를 읽는다. 없으면 빈 문자열을 반환한다.
+std::string read_environment_variable(const char* name) {
+    const DWORD length = GetEnvironmentVariableA(name, nullptr, 0);
+    if (length == 0) {
+        return {};
+    }
+    std::string value(length, '\0');
+    value.resize(GetEnvironmentVariableA(name, value.data(), length));
+    return value;
+}
+
 // UTF-8 텍스트 파일 전체를 읽는다. 열 수 없으면 false를 반환한다.
 bool read_text_file(const std::filesystem::path& path, std::string& text) {
     std::ifstream file(path, std::ios::binary);
@@ -175,6 +206,43 @@ bool read_text_file(const std::filesystem::path& path, std::string& text) {
     }
     text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return true;
+}
+
+std::unique_ptr<Translator> create_translator(const Options& options, TranslatorConfig config) {
+    const bool uses_deepl = options.translator == "deepl" || options.translator == "hybrid" ||
+                            options.translator == "compare";
+    DeepLTranslatorConfig deepl_config;
+    if (uses_deepl) {
+        deepl_config.api_key = options.deepl_key.empty() ? read_environment_variable("DEEPL_API_KEY") : options.deepl_key;
+        if (deepl_config.api_key.empty()) {
+            std::fprintf(stderr, "DeepL API key is missing.\n");
+            return {};
+        }
+        if (options.language != "auto") {
+            for (const char ch : options.language) {
+                deepl_config.source_language += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            }
+        }
+    }
+    if (options.translator == "deepl") {
+        return std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config);
+    }
+    if (options.translator == "hybrid" || options.translator == "compare") {
+        config.reference_drafts = true;
+    }
+    auto llama_translator = std::make_unique<LlamaTranslator>();
+    if (!llama_translator->init(options.llm_model, config)) {
+        std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
+        return {};
+    }
+    if (options.translator == "hybrid" || options.translator == "compare") {
+        auto drafted = std::make_unique<DraftedTranslator>(
+            std::make_unique<DeepLTranslator>(std::make_unique<WinHttpClient>(), config, deepl_config),
+            std::move(llama_translator), config.target_language);
+        drafted->set_compare_mode(options.translator == "compare");
+        return drafted;
+    }
+    return llama_translator;
 }
 
 // 번역 지시문에 넣을 방송 설명을 만든다.
@@ -190,6 +258,27 @@ std::string build_stream_info(const StreamContext& context) {
         info += "Title: " + context.title + ".";
     }
     return info;
+}
+
+// UTF-8 글자 수로 센 앞부분 / 뒷부분. 글자 중간에서 자르지 않는다.
+std::string first_characters(std::string_view text, size_t count) {
+    size_t end = 0;
+    for (size_t characters = 0; end < text.size() && characters < count; ++characters) {
+        do {
+            ++end;
+        } while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80);
+    }
+    return std::string(text.substr(0, end));
+}
+
+std::string last_characters(std::string_view text, size_t count) {
+    size_t start = text.size();
+    for (size_t characters = 0; start > 0 && characters < count; ++characters) {
+        do {
+            --start;
+        } while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80);
+    }
+    return std::string(text.substr(start));
 }
 
 // 확장 프로그램에서 받은 채팅 한 줄("이름: 내용")과 받은 시각.
@@ -227,17 +316,27 @@ constexpr float SAME_VOICE_SIMILARITY = 0.5f;
 
 // 앞 구간과의 사이가 이보다 짧게 비었으면 이어진 말로 본다. 말하다 잠깐 쉬는 것까지 잡도록
 // 발화를 끊는 기준(min_silence_ms)보다 길게 둔다. 서로 다른 짧은 문장이 합쳐지는 일도 있지만 번역에는 지장이 없다.
-constexpr uint32_t MAX_SENTENCE_GAP_MS = 1000;
+// 1초로 두면 같은 이야기를 잠깐 생각하며 이어 갈 때(1.0~1.5초) 따로 번역되는 일이 잦았다.
+constexpr uint32_t MAX_SENTENCE_GAP_MS = 1400;
 // 한 문장으로 합치는 최대 구간 수와 원문 길이(바이트). 넘으면 새 문장으로 시작한다.
-// 길게 합칠수록 다시 번역하는 시간이 늘어난다.
-constexpr size_t MAX_SENTENCE_FRAGMENTS = 3;
-constexpr size_t MAX_SENTENCE_BYTES = 180;
+// 길게 합칠수록 다시 번역하는 시간이 늘어나고, 자막 한 줄이 너무 길어져 읽기 어렵다.
+// 3구간, 180바이트(일본어 약 60자)까지 합치면 쉬지 않고 말하는 방송에서 자막이 두세 문장 길이가 되었고,
+// 번역 모델이 긴 문장의 뒷부분을 빠뜨리는 일도 있었다. 길이는 MAX_SENTENCE_BYTES로 막고, 구간 수는 넉넉히 둔다.
+// 2구간까지만 합치면 게임 방송처럼 짧게 끊어 말할 때 한 문장이 낱말 하나씩 따로 번역되었다.
+constexpr size_t MAX_SENTENCE_FRAGMENTS = 4;
+constexpr size_t MAX_SENTENCE_BYTES = 105;
 // 말이 끝난 뒤 번역을 시작하기까지 이보다 오래 걸렸으면 처리가 밀려 있는 것이다. 이때는 합치지 않는다.
 // 같은 말을 다시 번역하는 동안 뒤의 발화가 더 늦어진다.
 constexpr auto MAX_MERGE_LATENESS = std::chrono::seconds(3);
 
 // 방송을 보는 중에 인식 하나에 쓸 수 있는 최대 시간(ms). 이보다 오래 걸린 자막은 이미 늦었고, 뒤의 발화까지 밀리게 한다.
 constexpr uint32_t LIVE_STT_TIME_LIMIT_MS = 4000;
+
+// 음성 인식에 맥락으로 알려 줄 방송 이름(채널, 카테고리, 제목)과 직전 발화의 최대 길이(글자 수), 직전 발화 수.
+// whisper는 앞선 말을 일정 길이(224토큰)까지만 받으므로 짧게 둔다. 방송 제목은 길면 앞부분만 쓴다.
+constexpr size_t MAX_STT_NAME_CHARACTERS = 60;
+constexpr size_t MAX_STT_RECENT_CHARACTERS = 80;
+constexpr size_t MAX_STT_RECENT_LINES = 3;
 
 double to_seconds(Clock::duration duration) {
     return std::chrono::duration<double>(duration).count();
@@ -365,15 +464,16 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
     SetConsoleCtrlHandler(on_console_event, TRUE);
     // Enter를 기다리는 스레드는 끝낼 방법이 없으므로 떼어 놓는다. 프로세스가 끝나면 함께 끝난다.
     std::thread([] {
-        std::getchar();
-        SetEvent(quit_event());
+        if (std::getchar() != EOF) {
+            SetEvent(quit_event());
+        }
     }).detach();
     WaitForSingleObject(quit_event(), INFINITE);
 
     capture.stop();
+    worker.stop();
     consumer.request_stop();
     consumer.join();
-    worker.wait_until_idle();
     wav_dump.close();
 
     std::printf("Dropped %llu samples.\n", static_cast<unsigned long long>(ring.dropped_samples()));
@@ -384,11 +484,24 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
 
 // 한글/일본어가 들어간 파일 경로를 받을 수 있도록 유니코드 인자를 사용한다.
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 2 && std::wcscmp(argv[1], L"--probe-hardware") == 0) {
+        const HardwareProfile profile = probe_hardware();
+        std::printf("{\"vulkan\":%s,\"free_vram_mb\":%zu,\"total_vram_mb\":%zu}\n",
+                    profile.gpu ? "true" : "false", profile.free_vram_mb, profile.total_vram_mb);
+        return 0;
+    }
     // 인식 결과(UTF-8)가 콘솔에서 깨지지 않게 한다.
     SetConsoleOutputCP(CP_UTF8);
     std::printf("OverLay-Trans %s\n", OVERLAY_TRANS_VERSION);
 
-    const Options options = parse_options(argc, argv);
+    Options options = parse_options(argc, argv);
+    const TranslationSettings saved_settings = load_translation_settings();
+    if (std::filesystem::exists(translation_settings_path())) {
+        options.language = saved_settings.source_language;
+        options.target_language = saved_settings.target_language;
+        options.translator = saved_settings.translator;
+        options.deepl_key = saved_settings.deepl_key;
+    }
     const CaptureConfig config;
     VadConfig vad_config;
     if (!options.early_stt) {
@@ -410,8 +523,9 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    Translator translator;
+    std::unique_ptr<Translator> translator;
     TranslatorConfig translator_config{
+        .target_language = options.target_language,
         .gpu_layers = options.use_gpu ? options.llm_gpu_layers : 0,
         .gpu_device = options.gpu_device,
     };
@@ -419,10 +533,8 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "Failed to read glossary file: %s\n", to_utf8(options.glossary).c_str());
         return 1;
     }
-    if (!translator.init(options.llm_model, translator_config)) {
-        std::fprintf(stderr, "Failed to load translation model: %s\n", to_utf8(options.llm_model).c_str());
-        return 1;
-    }
+    translator = create_translator(options, translator_config);
+    if (!translator) return 1;
 
     // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
     const std::string token = load_or_create_pairing_token(pairing_token_path());
@@ -433,6 +545,16 @@ int wmain(int argc, wchar_t** argv) {
     std::optional<StreamContext> pending_context;
     std::deque<ReceivedChat> pending_chat;  // 아직 번역 맥락으로 쓰지 않은 채팅
     std::string applied_stream_info;        // 번역 지시문에 마지막으로 넣은 방송 설명
+    std::mutex settings_mutex;
+    std::mutex settings_view_mutex;
+    std::mutex settings_save_mutex;
+    TranslationSettings pending_settings = saved_settings;
+    pending_settings.source_language = options.language;
+    pending_settings.target_language = options.target_language;
+    pending_settings.translator = options.translator;
+    if (pending_settings.deepl_key.empty()) pending_settings.deepl_key = read_environment_variable("DEEPL_API_KEY");
+    pending_settings.has_deepl_key = !pending_settings.deepl_key.empty();
+    std::atomic<uint64_t> settings_generation{0};
 
     SubtitleServer server;
     const ServerConfig server_config{
@@ -468,6 +590,66 @@ int wmain(int argc, wchar_t** argv) {
                     pending_chat.pop_front();
                 }
             },
+        .get_settings = [&] {
+            std::lock_guard lock(settings_view_mutex);
+            return pending_settings;
+        },
+        .save_settings = [&](const TranslationSettings& settings) {
+            std::lock_guard save_lock(settings_save_mutex);
+            TranslationSettings previous;
+            {
+                std::lock_guard view_lock(settings_view_mutex);
+                previous = pending_settings;
+            }
+            const bool compare_toggle = (settings.translator == "compare" && previous.translator == "hybrid") ||
+                                        (settings.translator == "hybrid" && previous.translator == "compare");
+            if (compare_toggle && settings.source_language == previous.source_language &&
+                settings.target_language == previous.target_language && settings.deepl_key == previous.deepl_key) {
+                if (!save_translation_settings(settings)) return false;
+                static_cast<DraftedTranslator*>(translator.get())->set_compare_mode(settings.translator == "compare");
+                {
+                    std::lock_guard view_lock(settings_view_mutex);
+                    pending_settings = settings;
+                }
+                settings_generation.fetch_add(1, std::memory_order_release);
+                return true;
+            }
+            std::lock_guard lock(settings_mutex);
+            const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid" ||
+                                    settings.translator == "compare";
+            const bool rebuild = settings.translator != previous.translator ||
+                                 settings.target_language != previous.target_language ||
+                                 (uses_deepl && (settings.source_language != previous.source_language ||
+                                                 settings.deepl_key != previous.deepl_key));
+            const bool retarget_local = settings.translator == "local" && previous.translator == "local" &&
+                                        settings.target_language != previous.target_language;
+            std::unique_ptr<Translator> replacement;
+            if (rebuild && !retarget_local) {
+                Options requested = options;
+                requested.language = settings.source_language;
+                requested.target_language = settings.target_language;
+                requested.translator = settings.translator;
+                requested.deepl_key = settings.deepl_key;
+                TranslatorConfig requested_config = translator_config;
+                requested_config.target_language = settings.target_language;
+                replacement = create_translator(requested, requested_config);
+                if (!replacement) return false;
+            }
+            if (!save_translation_settings(settings)) return false;
+            recognizer.set_language(settings.source_language);
+            if (retarget_local) {
+                static_cast<LlamaTranslator*>(translator.get())->set_target_language(settings.target_language,
+                                                                                     applied_stream_info);
+            }
+            if (replacement) translator = std::move(replacement);
+            {
+                std::lock_guard view_lock(settings_view_mutex);
+                pending_settings = settings;
+                pending_settings.has_deepl_key = !settings.deepl_key.empty();
+            }
+            settings_generation.fetch_add(1, std::memory_order_release);
+            return true;
+        },
     };
     if (token.empty() || !server.start(server_config)) {
         std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);
@@ -486,7 +668,19 @@ int wmain(int argc, wchar_t** argv) {
 
     const bool is_live = options.input_file.empty();
     OpenSentence sentence;
+    // 음성 인식에 함께 알려 줄 맥락. 방송 이름과 용어, 직전에 인식한 말.
+    std::string stt_names;
+    std::deque<std::string> recent_speech;
+    uint64_t applied_settings_generation = 0;
     RecognitionWorker worker(recognizer, [&](const RecognizedSpeech& speech) {
+        std::lock_guard settings_lock(settings_mutex);
+        const uint64_t current_settings_generation = settings_generation.load(std::memory_order_acquire);
+        if (applied_settings_generation != current_settings_generation) {
+            sentence = {};
+            recent_speech.clear();
+            applied_stream_info.clear();
+            applied_settings_generation = current_settings_generation;
+        }
         const auto to_ms = [](Clock::duration duration) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
         };
@@ -500,13 +694,31 @@ int wmain(int argc, wchar_t** argv) {
             // 방송 화면이 아닌 페이지(목록, 검색 등)에서는 빈 정보가 온다. 그때는 직전 정보를 그대로 둔다.
             const std::string stream_info = build_stream_info(*context);
             if (!stream_info.empty() && stream_info != applied_stream_info) {
-                translator.set_stream_info(stream_info);
+                translator->set_stream_info(stream_info);
                 applied_stream_info = stream_info;
                 std::printf("Stream context: %s\n", stream_info.c_str());
+                stt_names = first_characters(context->channel + " " + context->category + " " + context->title,
+                                             MAX_STT_NAME_CHARACTERS);
             }
         }
 
         const std::string& text = speech.text;
+
+        // 다음 발화를 인식할 때 맥락으로 쓰도록 이 발화를 기억해 둔다.
+        // 이름을 한 번 맞게 인식하면 뒤에서도 같은 표기로 적고, 앞 이야기에 맞는 낱말을 고를 확률이 올라간다.
+        if (!text.empty()) {
+            recent_speech.push_back(text);
+            if (recent_speech.size() > MAX_STT_RECENT_LINES) {
+                recent_speech.pop_front();
+            }
+        }
+        std::string recent;
+        for (const std::string& line : recent_speech) {
+            recent += (recent.empty() ? "" : " ") + line;
+        }
+        if (options.stt_context) {
+            recognizer.set_context(stt_names, last_characters(recent, MAX_STT_RECENT_CHARACTERS));
+        }
 
         const auto translation_started_at = Clock::now();
 
@@ -583,8 +795,11 @@ int wmain(int argc, wchar_t** argv) {
             if (!tail_voice.empty()) {
                 sentence.tail_voice = std::move(tail_voice);
             }
-            translation = translator.translate(sentence.source, sentence.chat, merges,
-                                               options.stream_subtitles ? show_partial : Translator::PartialCallback{});
+            translation = translator->translate(sentence.source, sentence.chat, merges,
+                                                options.stream_subtitles ? show_partial : Translator::PartialCallback{});
+            if (translation.empty()) {
+                translation = "[번역 실패] " + sentence.source;
+            }
         }
         const auto finished_at = Clock::now();
         if (!translation.empty() && !first_shown_at) {
@@ -596,6 +811,10 @@ int wmain(int argc, wchar_t** argv) {
                         static_cast<double>(config.sample_rate * config.channels),
                     to_ms(speech.recognition_time), speech.started_early ? " (early)" : "",
                     to_ms(finished_at - translation_started_at), chat.size());
+        // 앞 구간과의 사이에 빈 시간. 이어진 말인데 합쳐지지 않았을 때 원인을 찾는 데 쓴다.
+        if (speech.silence_before_ms != SpeechSegment::NO_PREVIOUS_SEGMENT) {
+            std::printf(" | gap %u ms", speech.silence_before_ms);
+        }
         if (merges) {
             std::printf(" | merged %zu", sentence.fragment_count);
         } else if (continues) {
@@ -638,5 +857,9 @@ int wmain(int argc, wchar_t** argv) {
     if (!is_live) {
         return run_file(options, config, vad, worker);
     }
-    return run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    const int result = run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    // 캡처와 WAV 저장은 run_live에서 끝냈다. Debug 인식 커널이 긴 연산 중이면
+    // 작업 스레드 소멸자가 끝날 때까지 기다리므로, 사용자 종료 요청은 여기서 마친다.
+    std::fflush(nullptr);
+    std::_Exit(result);
 }

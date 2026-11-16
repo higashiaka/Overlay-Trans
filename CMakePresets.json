@@ -7,7 +7,10 @@
       "displayName": "Windows x64 (CPU)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-x64"
+      "binaryDir": "${sourceDir}/build/windows-x64",
+      "cacheVariables": {
+        "GGML_LLAMAFILE": "OFF"
+      }
     },
     {
       "name": "windows-x64-vulkan",
@@ -16,6 +19,15 @@
       "binaryDir": "${sourceDir}/build/vk",
       "cacheVariables": {
         "GGML_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "windows-x64-debug",
+      "displayName": "Windows x64 (Debug)",
+      "inherits": "windows-x64",
+      "binaryDir": "${sourceDir}/build/settings-debug",
+      "cacheVariables": {
+        "GGML_LLAMAFILE": "OFF"
       }
     },
     {
@@ -55,6 +67,11 @@
       "name": "windows-x64-vulkan",
       "configurePreset": "windows-x64-vulkan",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-x64-debug",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-arm64",

@@ -4,7 +4,7 @@
 ; 앱은 설치 프로그램에 들어 있지 않다. PC의 프로세서를 확인해 맞는 패키지(installer/package.ps1이 만든 zip)를
 ; 릴리즈에서 내려받아 설치한다. 그래서 설치 프로그램은 하나만 배포한다.
 ;
-;   x64   -> x64-vulkan  (Vulkan은 AMD, NVIDIA, Intel GPU에서 모두 동작한다)
+;   x64   -> x64-vulkan 또는 x64-cpu (Vulkan 드라이버와 그래픽 메모리를 확인한다)
 ;   ARM64 -> arm64-cpu   (스냅드래곤 X. Adreno GPU는 CPU보다 느려서 쓰지 않는다)
 ;
 ; 관리자 권한 없이 사용자 폴더에 설치한다. 모델은 앱을 처음 실행할 때 OverlayTrans.ps1이 내려받는다.
@@ -19,6 +19,9 @@
 ; 패키지 zip의 SHA-256. 비어 있으면 그 프로세서용 패키지 없이 만든 설치 프로그램이다.
 #ifndef Sha256X64Vulkan
   #define Sha256X64Vulkan ""
+#endif
+#ifndef Sha256X64Cpu
+  #define Sha256X64Cpu ""
 #endif
 #ifndef Sha256Arm64Cpu
   #define Sha256Arm64Cpu ""
@@ -63,13 +66,16 @@ ko.ExtractFailed=내려받은 패키지의 압축을 풀지 못했습니다.
 [Dirs]
 Name: "{app}\models"
 
+[Files]
+Source: "hardware-profile.ps1"; DestDir: "{tmp}"; Flags: dontcopy
+
 [Icons]
 ; 기본 콘솔(conhost)로 실행한다. Windows 터미널에서 열리면 앱이 콘솔 창을 숨기지 못한다.
 Name: "{autoprograms}\OverLay-Trans"; Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
 Name: "{autodesktop}\OverLay-Trans"; Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"
 
 [Run]
-Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,OverLay-Trans}"; Flags: postinstall nowait skipifsilent
+Filename: "{sys}\conhost.exe"; Parameters: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""{app}\OverlayTrans.ps1"""; WorkingDir: "{app}"; Flags: nowait
 
 [UninstallDelete]
 ; 앱 파일은 내려받아 풀어 놓은 것이라 설치 프로그램이 목록을 모른다. 설치 폴더를 통째로 지운다.
@@ -84,13 +90,30 @@ var
 
 // 이 PC에 설치할 패키지의 이름과 SHA-256을 정한다. 지원하는 패키지가 늘어나면 여기에 조건을 더한다.
 procedure SelectPackage(var Name, Sha256: String);
+var
+  ProbeFile, ResultFile, Arguments, Selection: String;
+  ExitCode: Integer;
 begin
   if IsArm64 then begin
     Name := 'arm64-cpu';
     Sha256 := '{#Sha256Arm64Cpu}';
   end else begin
-    Name := 'x64-vulkan';
-    Sha256 := '{#Sha256X64Vulkan}';
+    Name := 'x64-cpu';
+    ExtractTemporaryFile('hardware-profile.ps1');
+    ProbeFile := ExpandConstant('{tmp}\hardware-profile.ps1');
+    ResultFile := ExpandConstant('{tmp}\overlay-package.txt');
+    Arguments := '-NoProfile -ExecutionPolicy Bypass -File "' + ProbeFile +
+      '" -Format Package -OutputPath "' + ResultFile + '"';
+    if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      Arguments, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) and
+      (ExitCode = 0) and LoadStringFromFile(ResultFile, Selection) and
+      (Trim(Selection) = 'x64-vulkan') then
+      Name := 'x64-vulkan';
+
+    if Name = 'x64-vulkan' then
+      Sha256 := '{#Sha256X64Vulkan}'
+    else
+      Sha256 := '{#Sha256X64Cpu}';
   end;
 end;
 

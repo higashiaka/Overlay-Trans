@@ -59,6 +59,7 @@ globalThis.OverlayTrans = globalThis.OverlayTrans ?? {};
       }
 
       entry.translationElement.textContent = translation;
+      entry.element.classList.toggle("overlay-trans-comparison", translation.includes("\n"));
       entry.sourceElement.textContent = source;
       entry.timer = setTimeout(() => {
         entry.element.remove();

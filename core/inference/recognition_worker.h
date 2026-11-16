@@ -53,6 +53,9 @@ public:
     // 넘긴 구간이 모두 처리될 때까지 기다린다.
     void wait_until_idle();
 
+    // 실시간 입력 종료 시 대기 중인 인식을 버리고 현재 인식에 중단을 요청한다.
+    void stop();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

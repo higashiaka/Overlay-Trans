@@ -1,5 +1,6 @@
 ﻿# 설치된 OverLay-Trans를 실행한다. 바탕 화면과 시작 메뉴의 바로 가기가 이 파일을 실행한다.
 # 모델이 없으면 먼저 내려받고, options.txt에 적힌 옵션으로 앱을 시작한다.
+param([switch]$PlanOnly)
 
 $app = $PSScriptRoot
 $models = Join-Path $app "models"
@@ -52,6 +53,49 @@ if (Test-Path $optionsFile) {
     }
 }
 
+# Vulkan 패키지에서는 실제 그래픽 메모리에 맞춰 기본값을 고른다. 사용자가 options.txt에 적은 값이 우선이다.
+$profileScript = Join-Path $app 'hardware-profile.ps1'
+if (Test-Path $profileScript) {
+    try {
+        $profile = & $profileScript -Format Json | ConvertFrom-Json
+        $probeText = & $exe --probe-hardware 2>$null | Select-Object -Last 1
+        if ($LASTEXITCODE -eq 0 -and $probeText) {
+            $detected = $probeText | ConvertFrom-Json
+            $profile.vulkan = [bool]$detected.vulkan -and [long]$detected.free_vram_mb -ge 2048
+            $profile.vram_mb = [long]$detected.free_vram_mb
+        }
+    } catch {
+        $profile = [pscustomobject]@{ vulkan = $false; vram_mb = 0 }
+    }
+    $gpuOption = [array]::IndexOf($arguments, '--gpu')
+    $gpuDisabled = $gpuOption -ge 0 -and $gpuOption + 1 -lt $arguments.Count -and
+        $arguments[$gpuOption + 1] -eq 'cpu'
+    if (-not $profile.vulkan -or $gpuDisabled) {
+        if ($gpuOption -lt 0) { $arguments += @('--gpu', 'cpu') }
+        if ([array]::IndexOf($arguments, '--stt-model') -lt 0) {
+            $arguments += @('--stt-model', 'models\ggml-base.bin')
+        }
+        if ([array]::IndexOf($arguments, '--llm-gpu-layers') -lt 0) {
+            $arguments += @('--llm-gpu-layers', '0')
+        }
+        Write-Host 'GPU를 사용할 수 없어 CPU 기본 설정을 적용합니다.'
+    } else {
+        $sttName = if ($profile.vram_mb -ge 6144) {
+            'ggml-large-v3-turbo-q5_0.bin'
+        } else {
+            'ggml-small.bin'
+        }
+        $llmLayers = if ($profile.vram_mb -ge 7168) { 16 } elseif ($profile.vram_mb -ge 4096) { 8 } else { 0 }
+        if ([array]::IndexOf($arguments, '--stt-model') -lt 0) {
+            $arguments += @('--stt-model', "models\$sttName")
+        }
+        if ([array]::IndexOf($arguments, '--llm-gpu-layers') -lt 0) {
+            $arguments += @('--llm-gpu-layers', [string]$llmLayers)
+        }
+        Write-Host "Vulkan GPU 감지: $($profile.vram_mb) MB, 기본 STT $sttName, 번역 GPU 층 $llmLayers"
+    }
+}
+
 # 음성 인식 모델. options.txt에 --stt-model이 있으면 그 파일을, 없으면 기본 모델을 쓴다.
 # whisper.cpp가 배포하는 모델(ggml-*.bin)이면 없을 때 내려받는다. 그 밖의 파일은 사용자가 직접 넣어 둔 것으로 본다.
 $sttPath = Join-Path $models $defaultSttModel
@@ -70,6 +114,14 @@ if ($sttName -match '^ggml-[\w.-]+\.bin$') {
         Note   = "음성 인식 ($sttName)"
         Target = $sttPath
     }
+}
+
+if ($PlanOnly) {
+    [pscustomobject]@{
+        arguments = @($arguments)
+        models = @($modelFiles | ForEach-Object { $_.Name })
+    } | ConvertTo-Json -Compress -Depth 4
+    return
 }
 
 New-Item -ItemType Directory -Force $models | Out-Null

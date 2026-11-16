@@ -27,8 +27,14 @@ if (-not $exe) {
 }
 
 $out = Join-Path $root "build/package/$Arch-$Backend"
+$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'build/package'))
+$out = [System.IO.Path]::GetFullPath($out)
+if (-not $out.StartsWith($packageRoot + [System.IO.Path]::DirectorySeparatorChar,
+                         [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Package output must stay inside $packageRoot"
+}
 if (Test-Path $out) {
-    Remove-Item -Recurse -Force $out
+    Remove-Item -LiteralPath $out -Recurse -Force
 }
 New-Item -ItemType Directory -Force $out | Out-Null
 
@@ -44,14 +50,28 @@ if ($hasOpenCl) {
     Copy-Item $openclDll $out
 }
 Copy-Item (Join-Path $PSScriptRoot "OverlayTrans.ps1") $out
-# 기본 옵션은 아키텍처마다 다르다. (ARM64는 GPU 옵션이 없고 음성 인식 모델이 작다.)
-$options = if ($Arch -eq "arm64") { "options-arm64.txt" } else { "options.txt" }
+# 기본 옵션은 아키텍처와 백엔드마다 다르다.
+$options = if ($Arch -eq "arm64") {
+    "options-arm64.txt"
+} elseif ($Backend -eq "cpu") {
+    "options-x64-cpu.txt"
+} else {
+    "options.txt"
+}
 Copy-Item (Join-Path $PSScriptRoot $options) (Join-Path $out "options.txt")
+if ($Arch -eq "x64" -and $Backend -eq "vulkan") {
+    Copy-Item (Join-Path $PSScriptRoot 'hardware-profile.ps1') $out
+}
 Copy-Item -Recurse (Join-Path $root "extension") (Join-Path $out "extension")
 
 # Visual C++ 런타임을 실행 파일 옆에 둔다. 따로 설치하지 않아도(관리자 권한 없이) 실행되게 하기 위해서다.
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+if (-not (Test-Path $vswhere)) {
+    $vswhere = (Get-Command vswhere.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+}
+if (-not $vswhere) { throw "vswhere.exe not found" }
 $vs = & $vswhere -latest -products * -property installationPath
+if (-not $vs) { throw "Visual Studio C++ redist not found" }
 $redist = Get-ChildItem (Join-Path $vs "VC/Redist/MSVC") -Directory |
     Where-Object { $_.Name -match '^\d' } |
     Sort-Object { [version]$_.Name } |

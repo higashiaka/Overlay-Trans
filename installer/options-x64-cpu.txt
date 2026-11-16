@@ -1,0 +1,6 @@
+# OverLay-Trans CPU 기본 실행 옵션. 한 줄에 옵션 하나씩 적습니다.
+# 언어와 번역 방식은 확장 프로그램에서도 바꿀 수 있습니다.
+--language auto
+--gpu cpu
+--stt-model models\ggml-base.bin
+--llm-gpu-layers 0
