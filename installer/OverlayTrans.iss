@@ -1,4 +1,4 @@
-﻿; OverLay-Trans 설치 프로그램 (Inno Setup 6.3 이상).
+; OverLay-Trans 설치 프로그램 (Inno Setup 6.3 이상).
 ; installer/make-installer.ps1이 컴파일한다.
 ;
 ; 앱은 설치 프로그램에 들어 있지 않다. PC의 프로세서를 확인해 맞는 패키지(installer/package.ps1이 만든 zip)를
@@ -91,7 +91,8 @@ var
 // 이 PC에 설치할 패키지의 이름과 SHA-256을 정한다. 지원하는 패키지가 늘어나면 여기에 조건을 더한다.
 procedure SelectPackage(var Name, Sha256: String);
 var
-  ProbeFile, ResultFile, Arguments, Selection: String;
+  ProbeFile, ResultFile, Arguments: String;
+  Selection: AnsiString;
   ExitCode: Integer;
 begin
   if IsArm64 then begin
