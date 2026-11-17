@@ -59,9 +59,22 @@ jobs:
       - name: 빌드
         shell: pwsh
         run: |
-          cmake --preset ${{ matrix.preset }}
+          $testBuild = '${{ matrix.name }}' -eq 'x64-cpu'
+          $testOption = if ($testBuild) { 'ON' } else { 'OFF' }
+          cmake --preset ${{ matrix.preset }} -DOVERLAY_BUILD_CLI_TESTS=$testOption
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset ${{ matrix.preset }} --target OverlayTransWin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: CLI 및 확장 프로그램 테스트
+        if: matrix.name == 'x64-cpu'
+        shell: pwsh
+        run: |
+          cmake --build --preset ${{ matrix.preset }} --target overlay_cli_tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir ${{ matrix.build-dir }}/windows -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test extension/tests/cli-settings.test.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 패키지 만들기
