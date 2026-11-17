@@ -27,7 +27,7 @@ struct TranslatorConfig {
 };
 
 // 인식된 문장을 번역한다. 앞서 번역한 문장들을 맥락으로 함께 사용한다.
-// 로컬 모델(LlamaTranslator), DeepL(DeepLTranslator), 둘을 함께 쓰는 방식(DraftedTranslator) 중 하나를 골라 쓴다.
+// 로컬 모델, DeepL, 하이브리드, Windows의 GPT·Claude CLI 번역기 중 하나를 골라 쓴다.
 class Translator {
 public:
     // 만들어지는 중인 번역문을 받는다. 번역문의 앞부분(UTF-8)이 넘어오며, translate를 호출한 스레드에서 호출된다.
@@ -50,6 +50,10 @@ public:
     // on_partial을 넘기면 번역문이 만들어지는 동안 그때까지 만들어진 부분을 여러 번 알려 준다.
     virtual std::string translate(std::string_view text, std::span<const std::string> chat = {},
                                   bool replace_previous = false, const PartialCallback& on_partial = {}) = 0;
+    virtual std::string translate_with_draft(std::string_view text, std::span<const std::string> chat,
+        bool replace_previous, const PartialCallback& on_partial, const std::string&) {
+        return translate(text, chat, replace_previous, on_partial);
+    }
 };
 
 // llama.cpp로 번역한다.
@@ -68,6 +72,10 @@ public:
     // 초안이 비어 있으면 초안 없이 번역한다.
     std::string translate(std::string_view text, std::span<const std::string> chat, bool replace_previous,
                           const PartialCallback& on_partial, const std::string& draft);
+    std::string translate_with_draft(std::string_view text, std::span<const std::string> chat,
+        bool replace_previous, const PartialCallback& on_partial, const std::string& draft) override {
+        return translate(text, chat, replace_previous, on_partial, draft);
+    }
 
 private:
     struct Impl;

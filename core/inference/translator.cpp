@@ -91,11 +91,12 @@ struct LlamaTranslator::Impl {
     std::vector<Line> history;         // 모델의 메모리에 들어 있는 이전 문장들
     size_t formatted_history_size = 0;  // history까지를 대화 형식으로 만든 문자열의 길이
 
-    // 지시문과 예시까지를 대화 형식으로 만든 문자열과 그 토큰. 모델의 메모리 맨 앞에 미리 넣어 두고,
+    // 지시문과 예시까지를 대화 형식으로 만든 문자열. 모델의 메모리 맨 앞에 미리 넣어 두고,
     // 이전 문장들을 버릴 때도 이 부분은 남긴다. 다시 계산하는 데 문장 하나를 번역하는 것보다 오래 걸린다.
     // 미리 넣어 둘 수 없으면 비어 있다.
     std::string prefix;
-    std::vector<llama_token> prefix_tokens;
+    // 실제 KV 메모리에 들어 있는 토큰. 답변 종료 토큰과 공백도 다음 입력의 대화 형식에 맞춘다.
+    std::vector<llama_token> cached_tokens;
 
     // history(include_history가 false면 생략) 뒤에 current_message를 붙인 대화를 모델의 형식으로 만든다.
     // add_reply_start가 true면 모델이 답을 시작할 위치까지 포함한다.
@@ -181,13 +182,13 @@ void LlamaTranslator::Impl::load_prefix() {
     if (format_chat(&probe, false, false).compare(0, formatted.size(), formatted) != 0) {
         llama_memory_clear(memory, true);
         prefix.clear();
-        prefix_tokens.clear();
+        cached_tokens.clear();
         return;
     }
 
     std::vector<llama_token> tokens = tokenize(formatted, true);
     size_t same = 0;
-    while (same < tokens.size() && same < prefix_tokens.size() && tokens[same] == prefix_tokens[same]) {
+    while (same < tokens.size() && same < cached_tokens.size() && tokens[same] == cached_tokens[same]) {
         ++same;
     }
     if (same == 0 || !llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(same), -1)) {
@@ -196,15 +197,16 @@ void LlamaTranslator::Impl::load_prefix() {
     }
 
     prefix.clear();
-    prefix_tokens.clear();
+    cached_tokens.resize(same);
     if (same < tokens.size() &&
         llama_decode(context, llama_batch_get_one(tokens.data() + same, static_cast<int32_t>(tokens.size() - same))) !=
             0) {
         llama_memory_clear(memory, true);
+        cached_tokens.clear();
         return;
     }
     prefix = std::move(formatted);
-    prefix_tokens = std::move(tokens);
+    cached_tokens = std::move(tokens);
 }
 
 void LlamaTranslator::Impl::forget_old_lines() {
@@ -231,6 +233,7 @@ void LlamaTranslator::Impl::remove_last_line() {
         return;
     }
     formatted_history_size = line.formatted_start;
+    cached_tokens.resize(static_cast<size_t>(line.memory_start));
 }
 
 std::string LlamaTranslator::Impl::generate() {
@@ -268,6 +271,7 @@ std::string LlamaTranslator::Impl::generate() {
         if (llama_decode(context, llama_batch_get_one(&token, 1)) != 0) {
             break;
         }
+        cached_tokens.push_back(token);
     }
     return trim(text);
 }
@@ -433,7 +437,22 @@ std::string LlamaTranslator::Impl::run(const std::string& message, llama_pos& me
     std::vector<llama_token> tokens;
     const auto prepare = [&] {
         const std::string formatted = format_chat(&message, true);
-        tokens = tokenize(formatted.substr(formatted_history_size), formatted_history_size == 0);
+        const std::vector<llama_token> all_tokens = tokenize(formatted, true);
+        size_t same = 0;
+        while (same < all_tokens.size() && same < cached_tokens.size() &&
+               all_tokens[same] == cached_tokens[same]) {
+            ++same;
+        }
+        // 생성한 답변과 대화 템플릿은 종료 토큰, 공백, 후처리 결과가 다를 수 있다.
+        // 문자열 길이만큼 건너뛰면 종료 토큰이 빠진 채 다음 발화가 붙으므로 실제 토큰을 비교한다.
+        if (same < cached_tokens.size()) {
+            if (!llama_memory_seq_rm(llama_get_memory(context), 0, static_cast<llama_pos>(same), -1)) {
+                llama_memory_clear(llama_get_memory(context), true);
+                same = 0;
+            }
+            cached_tokens.resize(same);
+        }
+        tokens.assign(all_tokens.begin() + static_cast<std::ptrdiff_t>(same), all_tokens.end());
         // 메모리가 비어 있으면 지시문부터 한꺼번에 넣으므로 이 문장만의 시작 위치를 알 수 없다.
         formatted_start = formatted_history_size;
         memory_start = formatted_history_size == 0 ? -1 : llama_memory_seq_pos_max(llama_get_memory(context), 0) + 1;
@@ -454,6 +473,7 @@ std::string LlamaTranslator::Impl::run(const std::string& message, llama_pos& me
         forget_old_lines();
         return {};
     }
+    cached_tokens.insert(cached_tokens.end(), tokens.begin(), tokens.end());
 
     std::string translation = generate();
     // 모델이 옮기지 않고 남긴 가타카나는 소리 나는 대로 한글로 바꾼다.

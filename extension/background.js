@@ -166,6 +166,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true; // 응답을 나중에 보낸다.
   }
 
+  if (message?.type === "getCliStatus" || message?.type === "connectCli") {
+    if (!["codex", "claude"].includes(message.provider)) {
+      sendResponse({ ok: false, reason: "invalid_provider" });
+      return false;
+    }
+    loadPairing().then(async (pairing) => {
+      if (!pairing) return { ok: false, reason: "unpaired" };
+      try {
+        const connecting = message.type === "connectCli";
+        const response = await fetch(`http://127.0.0.1:${pairing.port}/v1/cli/${message.provider}${connecting ? "/connect" : ""}`, {
+          method: connecting ? "POST" : "GET",
+          headers: { Authorization: `Bearer ${pairing.key}` },
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!response.ok) return { ok: false, reason: response.status === 404 ? "unsupported" : "error" };
+        return { ok: true, account: await response.json() };
+      } catch {
+        return { ok: false, reason: "unreachable" };
+      }
+    }).then(sendResponse);
+    return true;
+  }
+
   if (message?.type === "getSettings" || message?.type === "saveSettings") {
     loadPairing().then(async (pairing) => {
       if (!pairing) return { ok: false, reason: "unpaired" };
@@ -175,7 +198,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           headers: { Authorization: `Bearer ${pairing.key}`, "Content-Type": "application/json" },
           ...(message.type === "saveSettings" ? { body: JSON.stringify(message.settings) } : {}),
         });
-        if (!response.ok) return { ok: false, reason: response.status === 401 ? "rejected" : "error" };
+        if (!response.ok) return { ok: false, reason: response.status === 401 ? "rejected" : response.status === 409 ? "cli_not_ready" : "error" };
         return { ok: true, settings: await response.json() };
       } catch {
         return { ok: false, reason: "unreachable" };

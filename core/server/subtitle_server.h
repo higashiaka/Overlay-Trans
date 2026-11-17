@@ -34,6 +34,15 @@ struct TranslationSettings {
     std::string translator = "local";
     std::string deepl_key;
     bool has_deepl_key = false;
+    std::string codex_model;
+    std::string claude_model;
+};
+
+struct CliAccountStatus {
+    bool installed = false;
+    bool logged_in = false;
+    bool connecting = false;
+    std::string message;
 };
 
 struct ServerConfig {
@@ -45,6 +54,8 @@ struct ServerConfig {
     std::function<void(std::vector<ChatMessage>)> on_chat;
     std::function<TranslationSettings()> get_settings;
     std::function<bool(const TranslationSettings&)> save_settings;
+    std::function<CliAccountStatus(const std::string&)> get_cli_status;
+    std::function<bool(const std::string&)> connect_cli;
 };
 
 // 브라우저 확장 프로그램과 자막, 방송 정보를 주고받는 로컬 HTTP 서버.

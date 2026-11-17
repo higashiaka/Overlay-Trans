@@ -50,6 +50,7 @@ if ($hasOpenCl) {
     Copy-Item $openclDll $out
 }
 Copy-Item (Join-Path $PSScriptRoot "OverlayTrans.ps1") $out
+Copy-Item (Join-Path $PSScriptRoot "cli-setup.ps1") $out
 # 기본 옵션은 아키텍처와 백엔드마다 다르다.
 $options = if ($Arch -eq "arm64") {
     "options-arm64.txt"

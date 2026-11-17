@@ -38,6 +38,8 @@ input[type="text"], input[type="password"], select {
 }
 
 input[type="password"], select { box-sizing: border-box; width: 100%; margin-top: 4px; }
+#cli-model { box-sizing: border-box; width: 100%; margin-top: 4px; }
+#open-settings { margin-top: 8px; }
 #save-settings { margin-top: 12px; }
 [hidden] { display: none !important; }
 

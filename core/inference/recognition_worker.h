@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -20,6 +21,7 @@ struct RecognizedSpeech {
     std::chrono::steady_clock::duration recognition_time;
     bool started_early = false;  // 발화가 끝났다고 확정되기 전에 인식을 시작했는지
     uint32_t silence_before_ms = 0;  // 직전 구간과의 사이에 있던 무음의 길이 (SpeechSegment 참고)
+    size_t batched_segments = 1;
 };
 
 // 발화 구간을 별도 스레드에서 차례대로 인식한다.
