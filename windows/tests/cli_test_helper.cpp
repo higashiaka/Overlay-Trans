@@ -41,6 +41,8 @@ int wmain(int argc, wchar_t** argv) {
             {"pid", GetCurrentProcessId()}, {"threads", thread_count}, {"cwd", utf8(std::filesystem::current_path().wstring())}}.dump();
     };
     if (!claude && std::find(arguments.begin(), arguments.end(), "app-server") != arguments.end()) {
+        if (env(L"ACCESS_TOKEN") != L"fixture-access" ||
+            std::find(arguments.begin(), arguments.end(), "model_provider=\"openai_chatgpt_plan\"") == arguments.end()) return 3;
         const auto emit = [](const nlohmann::json& event) { std::cout << event.dump() << std::endl; };
         int thread_count = 0;
         int turn_count = 0;

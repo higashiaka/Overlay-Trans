@@ -10,7 +10,7 @@ add_executable(OverlayTransWin
 
 # 계정 연결 창은 개발 빌드에서도 실행 파일 옆의 스크립트를 사용한다.
 add_custom_command(TARGET OverlayTransWin POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/installer/cli-setup.ps1 $<TARGET_FILE_DIR:OverlayTransWin>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/installer/cli-setup.ps1 ${PROJECT_SOURCE_DIR}/installer/chatgpt-sign-in.ps1 $<TARGET_FILE_DIR:OverlayTransWin>
 )
 
 target_include_directories(OverlayTransWin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
