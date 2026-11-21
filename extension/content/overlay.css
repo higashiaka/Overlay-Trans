@@ -43,3 +43,9 @@
 .overlay-trans-hide-source .overlay-trans-source {
   display: none;
 }
+
+#overlay-trans-root.overlay-trans-audio {
+  position: fixed;
+  bottom: 24px;
+  width: min(90%, 960px);
+}

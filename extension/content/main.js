@@ -13,8 +13,13 @@
   // 새 채팅을 확인하는 간격. 스트리머가 채팅을 보고 답하기 전에 앱에 도착해야 하므로 짧게 둔다.
   const CHAT_INTERVAL_MS = 1500;
   const DIAGNOSTICS_INTERVAL_MS = 2000;
+  // 음성이 멈춘 직후에도 음성 인식과 번역 결과가 늦게 도착할 수 있다.
+  const AUDIO_SUBTITLE_GRACE_MS = 12000;
 
   let port = null;
+  let customVideo = null;
+  let showAudioSubtitles = false;
+  let audioTimeout;
   // 이 탭에서 앱으로 보낸 채팅 수. 팝업의 진단 정보에 표시한다.
   let sentChatCount = 0;
 
@@ -56,9 +61,24 @@
     }
   }
 
+  function stopAudioSubtitles() {
+    clearTimeout(audioTimeout);
+    showAudioSubtitles = false;
+    overlay.detach();
+  }
+
+  function updateAudioState(audible) {
+    clearTimeout(audioTimeout);
+    if (audible) {
+      showAudioSubtitles = true;
+    } else if (showAudioSubtitles) {
+      audioTimeout = setTimeout(stopAudioSubtitles, AUDIO_SUBTITLE_GRACE_MS);
+    }
+  }
+
   function connect() {
     try {
-      port = chrome.runtime.connect({ name: "subtitles" });
+      port = chrome.runtime.connect({ name: site.audioOnly ? "subtitles-audio" : "subtitles" });
     } catch {
       // 확장 프로그램이 다시 설치되거나 갱신되면 이 페이지의 스크립트는 더 이상 연결할 수 없다.
       // 페이지를 새로 고치면 새 스크립트가 실행된다.
@@ -67,11 +87,19 @@
     }
 
     port.onMessage.addListener((message) => {
-      if (message.type === "subtitle") {
+      if (site.audioOnly) {
+        if (message.type === "tabAudio") {
+          updateAudioState(message.audible);
+        } else if (message.type === "subtitle" && showAudioSubtitles) {
+          overlay.attachToPage();
+          overlay.show(message);
+        }
+      } else if (message.type === "subtitle" && (!site.findVideo || customVideo)) {
         overlay.show(message);
       }
     });
     port.onDisconnect.addListener(() => {
+      if (site.audioOnly) stopAudioSubtitles();
       port = null;
       setTimeout(connect, RECONNECT_DELAY_MS);
     });
@@ -92,8 +120,20 @@
       port = null;
     }
   }, KEEPALIVE_INTERVAL_MS);
-  setInterval(() => overlay.attach(site.findPlayer()), ATTACH_INTERVAL_MS);
-  setInterval(sendContext, CONTEXT_INTERVAL_MS);
-  setInterval(sendNewChat, CHAT_INTERVAL_MS);
-  setInterval(sendDiagnostics, DIAGNOSTICS_INTERVAL_MS);
+  if (site.findVideo) {
+    const updateVideo = () => {
+      customVideo = site.findVideo();
+      overlay.attachToVideo(customVideo);
+    };
+    updateVideo();
+    setInterval(updateVideo, ATTACH_INTERVAL_MS);
+    document.addEventListener("fullscreenchange", updateVideo);
+    window.addEventListener("resize", updateVideo);
+    window.addEventListener("scroll", updateVideo, { capture: true, passive: true });
+  } else if (!site.audioOnly) {
+    setInterval(() => overlay.attach(site.findPlayer()), ATTACH_INTERVAL_MS);
+    setInterval(sendContext, CONTEXT_INTERVAL_MS);
+    setInterval(sendNewChat, CHAT_INTERVAL_MS);
+    setInterval(sendDiagnostics, DIAGNOSTICS_INTERVAL_MS);
+  }
 })();

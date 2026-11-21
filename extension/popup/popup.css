@@ -92,3 +92,20 @@ button:disabled {
   gap: 6px;
   font-weight: 400;
 }
+
+#custom-site-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+
+#custom-site-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+#custom-site-list button { flex-shrink: 0; }
