@@ -7,6 +7,7 @@ const RETRY_DELAY_MS = 2000;
 const PAIRING_CODE_PATTERN = /^(\d{2,5})-([0-9A-Z]{16})$/;
 
 const ports = new Set();
+const audioPorts = new Map();
 let status = "idle"; // idle | unpaired | connected | rejected | disconnected
 let polling = false;
 // 방송 탭이 마지막으로 알려 준 진단 정보 (찾은 채팅 줄 수, 보낸 채팅 수).
@@ -56,9 +57,23 @@ function broadcast(message) {
       port.postMessage(message);
     } catch {
       ports.delete(port);
+      audioPorts.delete(port);
     }
   }
 }
+
+chrome.tabs.onUpdated.addListener((tabId, { audible, mutedInfo }, tab) => {
+  if (audible === undefined && mutedInfo === undefined) return;
+  for (const [port, audioTabId] of audioPorts) {
+    if (tabId !== audioTabId) continue;
+    try {
+      port.postMessage({ type: "tabAudio", audible: !!tab.audible && !tab.mutedInfo?.muted });
+    } catch {
+      ports.delete(port);
+      audioPorts.delete(port);
+    }
+  }
+});
 
 function setStatus(next) {
   if (status !== next) {
@@ -120,13 +135,20 @@ async function pollSubtitles() {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "subtitles") {
+  const audioOnly = port.name === "subtitles-audio";
+  if (port.name !== "subtitles" && !audioOnly) {
     return;
   }
   ports.add(port);
   port.postMessage({ type: "status", status });
+  if (audioOnly && port.sender?.tab) {
+    const tab = port.sender.tab;
+    audioPorts.set(port, tab.id);
+    port.postMessage({ type: "tabAudio", audible: !!tab.audible && !tab.mutedInfo?.muted });
+  }
   // 콘텐츠 스크립트가 주기적으로 보내는 메시지는 서비스 워커가 잠들지 않게 하는 역할도 한다.
   port.onMessage.addListener((message) => {
+    if (audioOnly) return;
     if (message?.type === "context") {
       post("/v1/context", message.context);
     } else if (message?.type === "chat") {
@@ -135,7 +157,10 @@ chrome.runtime.onConnect.addListener((port) => {
       diagnostics = message.diagnostics;
     }
   });
-  port.onDisconnect.addListener(() => ports.delete(port));
+  port.onDisconnect.addListener(() => {
+    ports.delete(port);
+    audioPorts.delete(port);
+  });
   pollSubtitles();
 });
 

@@ -27,6 +27,32 @@ globalThis.OverlayTrans = globalThis.OverlayTrans ?? {};
       }
     },
 
+    attachToVideo(video) {
+      if (!video) {
+        this.detach();
+        return;
+      }
+      const rect = video.getBoundingClientRect();
+      const bottom = rect.bottom - rect.height * 0.12;
+      root.style.position = "fixed";
+      root.style.left = `${rect.left + rect.width / 2}px`;
+      root.style.bottom = `${innerHeight - bottom}px`;
+      root.style.width = `${rect.width * 0.9}px`;
+      this.attach(document.fullscreenElement ?? document.body);
+    },
+
+    attachToPage() {
+      root.classList.add("overlay-trans-audio");
+      this.attach(document.fullscreenElement ?? document.body);
+    },
+
+    detach() {
+      root.remove();
+      for (const entry of visibleLines.values()) clearTimeout(entry.timer);
+      visibleLines.clear();
+      root.replaceChildren();
+    },
+
     setShowSource(value) {
       showSource = value;
       root.classList.toggle("overlay-trans-hide-source", !showSource);

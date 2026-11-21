@@ -8,6 +8,7 @@
 #define NOMINMAX
 #include <httplib.h>
 #include <windows.h>
+#include <dpapi.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -217,6 +218,22 @@ int wmain(int argc, wchar_t** argv) {
         std::filesystem::copy_file(argv[1], root / "codex.exe", std::filesystem::copy_options::overwrite_existing);
         std::filesystem::copy_file(argv[1], root / "claude.exe", std::filesystem::copy_options::overwrite_existing);
         SetEnvironmentVariableW(L"PATH", root.c_str());
+        SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
+        const auto session_path = root / L"OverlayTrans/ChatGPT/session.bin";
+        std::filesystem::create_directories(session_path.parent_path());
+        auto save_test_session = [&] {
+            auto record = nlohmann::json{{"scope", "chatgpt.tokens.use.direct"},
+                {"access_token", "fixture-access"}, {"refresh_token", "fixture-refresh"},
+                {"client_id", "oaiapp_fixture"}, {"expires_at", 4102444800LL}}.dump();
+            DATA_BLOB input{static_cast<DWORD>(record.size()), reinterpret_cast<BYTE*>(record.data())}, output{};
+            check(CryptProtectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output),
+                  "Fixture credentials could not be encrypted");
+            std::ofstream file(session_path, std::ios::binary);
+            file.write(reinterpret_cast<const char*>(output.pbData), output.cbData);
+            LocalFree(output.pbData);
+            check(static_cast<bool>(file), "Fixture credentials could not be saved");
+        };
+        save_test_session();
         const auto log_path = root / L"request.json";
         SetEnvironmentVariableW(L"OVERLAY_CLI_TEST_LOG", log_path.c_str());
         const auto set_scenario = [&](const wchar_t* scenario) {
@@ -233,7 +250,9 @@ int wmain(int argc, wchar_t** argv) {
             auto status = accounts.status(provider);
             check(status.installed && status.logged_in, "Signed-in status not detected");
             set_scenario(L"logged_out");
+            if (provider == "codex") DeleteFileW(session_path.c_str());
             check(!accounts.status(provider).logged_in, "Signed-out status not detected");
+            if (provider == "codex") save_test_session();
             set_scenario(L"ok");
             const std::string model = "model with spaces \"quotes\" & $(literal) \\";
             CliTranslator translator(provider, model, {});
@@ -279,12 +298,12 @@ int wmain(int argc, wchar_t** argv) {
                   "Recent context missing");
             if (provider == "codex") {
                 const auto after_followup = read_json(log_path);
-                check(before_followup["pid"] == after_followup["pid"] && before_followup["threads"] == after_followup["threads"],
-                      "Codex process or conversation was recreated for follow-up subtitle");
+                check(before_followup["pid"] == after_followup["pid"] && after_followup["threads"].get<int>() == before_followup["threads"].get<int>() + 1,
+                      "Codex should reuse its process and start a fresh thread for each subtitle");
                 check(!std::filesystem::exists(workspace), "Failed Codex session workspace was not cleaned up");
                 check(!translator.translate_with_draft("원문", {}, false, {}, "기계 번역 초안").empty(), "Codex draft request failed");
                 check(read_json(log_path)["input"].get<std::string>().find("[Draft]\n기계 번역 초안") != std::string::npos,
-                      "Codex did not receive DeepL draft in persistent session");
+                      "Codex did not receive the current DeepL draft");
             }
         }
 
@@ -298,11 +317,17 @@ int wmain(int argc, wchar_t** argv) {
             const auto second = read_json(log_path);
             check(first["pid"] == second["pid"] && second["threads"].get<int>() == first["threads"].get<int>() + 1,
                   "Context rollover restarted process or did not reset thread");
+            check(second["input"].get<std::string>().find("first") != std::string::npos, "Previous subtitle was lost");
             translator.set_stream_info("changed stream");
             check(!translator.translate("third", {}, false, {}).empty(), "Codex stream-info reset failed");
             const auto third = read_json(log_path);
             check(second["pid"] == third["pid"] && third["threads"].get<int>() == second["threads"].get<int>() + 1,
                   "Stream-info reset restarted process or reused stale instructions");
+            check(third["input"].get<std::string>().find("second") == std::string::npos, "Old stream leaked into history");
+            check(!translator.translate(std::string(2200, 'x'), {}, false, {}).empty(), "Long subtitle failed");
+            check(!translator.translate("short", {}, false, {}).empty(), "Short follow-up failed");
+            check(read_json(log_path)["input"].get<std::string>().find(std::string(50, 'x')) == std::string::npos,
+                  "Oversized previous subtitle leaked into history");
         }
 
         TranslationSettings saved;
@@ -330,7 +355,7 @@ int wmain(int argc, wchar_t** argv) {
         response = client.Post("/v1/settings", hybrid_settings.dump(), "application/json");
         check(response && response->status == 200 && saved.translator == "codex-hybrid",
               "DeepL+Codex mode was truncated or mapped to wrong account provider");
-        set_scenario(L"logged_out");
+        DeleteFileW(session_path.c_str());
         response = client.Post("/v1/settings", settings, "application/json");
         check(response && response->status == 409, "Disconnected CLI settings accepted");
         response = client.Post("/v1/cli/claude/connect", "", "application/json");

@@ -36,8 +36,8 @@
         <option value="deepl">DeepL API</option>
         <option value="hybrid">DeepL 초안 + 기기 내 번역</option>
         <option value="compare">실시간 비교 (DeepL / 하이브리드)</option>
-        <option value="codex">GPT 계정 (Codex CLI)</option>
-        <option value="codex-hybrid">DeepL 초안 + GPT 보정 (Codex CLI)</option>
+        <option value="codex">ChatGPT 구독</option>
+        <option value="codex-hybrid">DeepL 초안 + ChatGPT 보정</option>
         <option value="claude">Claude 계정 (Claude Code)</option>
       </select>
       <div id="deepl-fields" hidden>
@@ -63,11 +63,30 @@
     </section>
     <section>
       <h2>3. 자막 보기</h2>
-      <p class="hint">Twitch 또는 YouTube 영상을 재생하세요. 번역 설정은 저장 후 다음 발화부터 적용됩니다.</p>
+      <p class="hint">지원 사이트에서 영상이나 음성을 재생하세요. 번역 설정은 저장 후 다음 발화부터 적용됩니다.</p>
       <label class="checkbox"><input id="show-source" type="checkbox" /> 원문도 함께 표시</label>
       <p id="diagnostics" class="hint"></p>
     </section>
+    <section>
+      <h2>4. 음성 자막 사이트</h2>
+      <form id="custom-site-form">
+        <label for="custom-site-mode">자막 모드</label>
+        <select id="custom-site-mode">
+          <option value="video">영상 위에 표시</option>
+          <option value="audio">음성 전용 · 페이지 하단에 표시</option>
+        </select>
+        <label for="custom-site-url">사이트 주소</label>
+        <div class="row">
+          <input id="custom-site-url" type="text" placeholder="https://example.com" required autocomplete="off" spellcheck="false" />
+          <button id="custom-site-add" type="submit">추가</button>
+        </div>
+      </form>
+      <p class="hint">같은 주소를 다시 추가하면 자막 모드가 바뀝니다. 변경 후 해당 탭을 새로고침하세요.</p>
+      <ul id="custom-site-list"></ul>
+      <p id="custom-site-result" class="result" role="status"></p>
+    </section>
 
     <script src="popup.js"></script>
+    <script src="custom-sites.js"></script>
   </body>
 </html>

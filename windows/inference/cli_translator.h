@@ -9,7 +9,7 @@
 
 namespace overlay_trans {
 
-// 인증 정보는 공식 CLI가 관리한다. 앱은 로그인 상태만 확인한다.
+// ChatGPT 구독 연결과 Claude CLI 로그인을 관리한다.
 class CliAccounts {
 public:
     CliAccounts();
@@ -39,6 +39,7 @@ private:
     std::string model_;
     TranslatorConfig config_;
     std::string stream_info_;
+    std::string chatgpt_account_;
     std::deque<std::pair<std::string, std::string>> history_;
 };
 

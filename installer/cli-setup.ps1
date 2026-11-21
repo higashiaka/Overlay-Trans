@@ -1,4 +1,4 @@
-﻿# 공식 CLI 설치와 계정 로그인만 담당한다. 토큰은 각 CLI가 직접 보관한다.
+﻿# 공식 CLI 설치와 계정 연결을 담당한다.
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('codex', 'claude')]
@@ -62,9 +62,11 @@ try {
         if (-not $command) { throw 'CLI를 찾지 못했습니다. 앱을 다시 실행한 뒤 연결해 주세요.' }
         $CliPath = $command.Source
     }
-    # 로그인은 각 CLI의 공식 브라우저 인증 흐름에 맡긴다.
+    # ChatGPT는 앱에서 연결하고 Claude는 공식 CLI에서 로그인한다.
     if ($Provider -eq 'codex') {
-        & $CliPath login
+        . (Join-Path $PSScriptRoot "chatgpt-sign-in.ps1")
+        Connect-ChatGpt
+        exit 0
     } else {
         & $CliPath auth login
     }
@@ -73,7 +75,8 @@ try {
     Write-Host '로그인이 완료되었습니다. 확장 프로그램에서 연결 확인 후 설정 저장을 눌러 주세요.' -ForegroundColor Green
 } catch {
     Write-Host ''
-    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($Provider -eq 'codex') { Write-Host 'ChatGPT 계정 연결에 실패했거나 취소되었습니다.' -ForegroundColor Red }
+    else { Write-Host $_.Exception.Message -ForegroundColor Red }
     Read-Host 'Enter를 누르면 창을 닫습니다' | Out-Null
     exit 1
 }
