@@ -93,7 +93,7 @@ async function refreshCliStatus(manual = false) {
     const account = response.account;
     cliStatus.textContent = account.message + (manual ? ` (${new Date().toLocaleTimeString()} 확인)` : "");
     cliConnect.disabled = account.connecting;
-    cliConnect.textContent = account.connecting ? "로그인 진행 중…" : account.logged_in ? "다시 로그인" : account.installed ? "계정 로그인" : "설치·로그인";
+    cliConnect.textContent = account.connecting ? "로그인 진행 중…" : provider === "codex" ? (account.logged_in ? "ChatGPT 연결 관리" : "Continue with ChatGPT") : account.logged_in ? "다시 로그인" : account.installed ? "계정 로그인" : "설치·로그인";
   } catch {
     if (mode === translator.value) {
       cliStatus.textContent = cliFailureText();
