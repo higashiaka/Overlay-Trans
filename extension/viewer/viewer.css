@@ -1,0 +1,20 @@
+:root { color-scheme: dark; font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif; background: #121218; color: #eee; }
+body { margin: 0; }
+header { display: flex; align-items: center; gap: 24px; padding: 12px 24px; }
+h1 { font-size: 18px; margin: 0; }
+#status { margin: 0; color: #c5b6f4; }
+#player { position: relative; background: #000; width: 100%; height: min(70vh, 760px); }
+#player:fullscreen { height: 100vh; }
+video { width: 100%; height: 100%; object-fit: contain; }
+.settings { max-width: 1040px; margin: auto; padding: 20px 24px; }
+label { display: inline-flex; align-items: center; gap: 10px; margin: 0 24px 14px 0; }
+select, button { padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: #252332; color: inherit; font: inherit; }
+button { cursor: pointer; }
+button:disabled { opacity: .5; }
+.slider { display: flex; max-width: 650px; }
+input[type="range"] { flex: 1; accent-color: #ad91ff; }
+output { min-width: 48px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.hint, #metrics { color: #b8b5c3; }
+#history { max-height: 200px; overflow: auto; }
+[hidden] { display: none !important; }

@@ -115,8 +115,11 @@ test("background validates providers and pairs account requests to the app", asy
     AbortSignal, setTimeout,
     chrome: {
       runtime: { onConnect: { addListener() {} }, onMessage: { addListener(value) { listener = value; } } },
-      tabs: { onUpdated: { addListener() {} } },
-      storage: { local: { get: async () => ({ pairingCode: "47815-ABCDEFGHIJKLMNOP" }) } },
+      tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} } },
+      storage: {
+        local: { get: async () => ({ pairingCode: "47815-ABCDEFGHIJKLMNOP" }) },
+        session: { get: async () => ({}) },
+      },
     },
     async fetch(url, options) {
       requests.push({ url, options });

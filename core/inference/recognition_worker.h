@@ -22,6 +22,8 @@ struct RecognizedSpeech {
     bool started_early = false;  // 발화가 끝났다고 확정되기 전에 인식을 시작했는지
     uint32_t silence_before_ms = 0;  // 직전 구간과의 사이에 있던 무음의 길이 (SpeechSegment 참고)
     size_t batched_segments = 1;
+    std::string audio_session;
+    int64_t source_ended_at_ms = 0;
 };
 
 // 발화 구간을 별도 스레드에서 차례대로 인식한다.
@@ -50,7 +52,7 @@ public:
 
     // 끝난 것이 확정된 구간을 넘긴다. 같은 구간의 인식을 미리 시작해 두었으면 그 결과를 쓴다.
     // 밀린 구간이 많으면 자리가 날 때까지 기다린다.
-    void submit(const SpeechSegment& segment);
+    void submit(const SpeechSegment& segment, const std::string& audio_session = {}, int64_t source_ended_at_ms = 0);
 
     // 넘긴 구간이 모두 처리될 때까지 기다린다.
     void wait_until_idle();

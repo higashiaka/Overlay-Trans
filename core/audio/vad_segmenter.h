@@ -68,6 +68,8 @@ public:
 
     // 진행 중인 발화를 즉시 마무리한다. 입력이 끊겼을 때 호출한다.
     void flush();
+    // Discard partial speech when changing between system audio and a browser session.
+    void reset();
 
 private:
     struct Impl;

@@ -41,6 +41,7 @@ struct TranslationWorker::Impl {
             pending.pop_front();
             // 추가 발화를 기다리지 않는다. 앞 번역을 기다리며 이미 쌓인 결과만 묶는다.
             while (batching && !pending.empty() && next.speech.batched_segments < MAX_BATCH_SEGMENTS &&
+                   next.speech.audio_session == pending.front().speech.audio_session &&
                    next.speech.text.size() + pending.front().speech.text.size() + 1 <= MAX_BATCH_TEXT_BYTES) {
                 auto& following = pending.front();
                 if (!following.speech.text.empty()) {

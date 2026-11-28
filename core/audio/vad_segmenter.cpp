@@ -218,4 +218,16 @@ void VadSegmenter::flush() {
     impl_->has_previous = false;
 }
 
+void VadSegmenter::reset() {
+    impl_->cancel_pause();
+    impl_->pending.clear();
+    impl_->pre_roll.clear();
+    impl_->segment.clear();
+    impl_->speech_probabilities.clear();
+    impl_->lead_samples = impl_->silence_samples = impl_->paused_samples = impl_->gap_samples = 0;
+    impl_->has_previous = impl_->in_speech = false;
+    impl_->silence_before_ms = SpeechSegment::NO_PREVIOUS_SEGMENT;
+    whisper_vad_reset_state(impl_->context);
+}
+
 }  // namespace overlay_trans

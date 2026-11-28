@@ -32,6 +32,8 @@ struct Job {
     std::stop_source stop;  // 버리는 구간의 인식을 도중에 멈춘다.
     Clock::time_point speech_ended_at;
     uint32_t silence_before_ms = 0;
+    std::string audio_session;
+    int64_t source_ended_at_ms = 0;
 };
 
 }  // namespace
@@ -83,7 +85,7 @@ void RecognitionWorker::Impl::run(std::stop_token stop) {
             if (job.state == JobState::Confirmed) {
                 lock.unlock();
                 on_result({job.samples, std::move(text), job.speech_ended_at, recognition_time, started_early,
-                           job.silence_before_ms});
+                           job.silence_before_ms, 1, job.audio_session, job.source_ended_at_ms});
                 lock.lock();
             }
         }
@@ -134,9 +136,13 @@ void RecognitionWorker::cancel_early() {
     impl_->cancel_early();
 }
 
-void RecognitionWorker::submit(const SpeechSegment& segment) {
+void RecognitionWorker::submit(const SpeechSegment& segment, const std::string& audio_session, int64_t source_ended_at_ms) {
     const std::span<const float> samples = segment.samples;
-    const auto speech_ended_at = Clock::now() - std::chrono::milliseconds(segment.waited_ms);
+    const auto source_end = source_ended_at_ms ? source_ended_at_ms - segment.waited_ms : 0;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto speech_ended_at = Clock::now() - std::chrono::milliseconds(
+        source_end ? now_ms - source_end : segment.waited_ms);
 
     std::unique_lock lock(impl_->mutex);
     if (impl_->stopping) {
@@ -147,6 +153,8 @@ void RecognitionWorker::submit(const SpeechSegment& segment) {
         if (early.samples.size() == samples.size()) {
             early.speech_ended_at = speech_ended_at;
             early.silence_before_ms = segment.silence_before_ms;
+            early.audio_session = audio_session;
+            early.source_ended_at_ms = source_end;
             early.state = JobState::Confirmed;
             impl_->changed.notify_all();
             return;
@@ -162,7 +170,9 @@ void RecognitionWorker::submit(const SpeechSegment& segment) {
     impl_->jobs.push_back({.samples = {samples.begin(), samples.end()},
                            .state = JobState::Confirmed,
                            .speech_ended_at = speech_ended_at,
-                           .silence_before_ms = segment.silence_before_ms});
+                           .silence_before_ms = segment.silence_before_ms,
+                           .audio_session = audio_session,
+                           .source_ended_at_ms = source_end});
     impl_->changed.notify_all();
 }
 

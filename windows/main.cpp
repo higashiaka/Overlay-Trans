@@ -1,4 +1,5 @@
 #include "audio/ring_buffer.h"
+#include "audio/browser_audio.h"
 #include "audio/vad_segmenter.h"
 #include "audio/wav_writer.h"
 #include "capture/audio_file_reader.h"
@@ -316,6 +317,7 @@ constexpr auto MAX_CHAT_AGE = std::chrono::seconds(30);
 // 긴 말은 자막이 늦지 않게 여러 구간으로 끊어서 내보낸다. 뒤 구간이 앞 구간에서 이어진 말이면,
 // 앞 구간과 합친 문장을 다시 번역해 화면의 자막을 바꾼다. 이렇게 합치고 있는 문장을 담는다.
 struct OpenSentence {
+    std::string audio_session;
     std::string source;             // 지금까지 합친 원문
     std::vector<std::string> chat;  // 번역 맥락으로 쓴 채팅
     size_t fragment_count = 0;      // 합친 구간 수. 0이면 합치고 있는 문장이 없다.
@@ -408,7 +410,8 @@ BOOL WINAPI on_console_event(DWORD event) {
 
 // 시스템 오디오를 캡처해 종료 신호(quit_event)가 올 때까지 처리한다.
 int run_live(const Options& options, const CaptureConfig& config, const VadConfig& vad_config, VadSegmenter& vad,
-             RecognitionWorker& worker, const std::string& pairing_code) {
+             RecognitionWorker& worker, const std::string& pairing_code, BrowserAudioInput& browser_audio,
+             std::string& processing_session, int64_t& processing_ended_at_ms) {
     const size_t samples_per_second = static_cast<size_t>(config.sample_rate) * config.channels;
 
     WavWriter wav_dump;
@@ -423,19 +426,47 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
 
     LoopbackCapture capture;
     const bool started = capture.start(config, [&](const float* frames, uint32_t frame_count) {
-        ring.write(frames, static_cast<size_t>(frame_count) * config.channels);
+        if (!browser_audio.active()) ring.write(frames, static_cast<size_t>(frame_count) * config.channels);
     });
     if (!started) {
         std::fprintf(stderr, "Failed to start loopback capture: %s\n", capture.last_error().c_str());
         return 1;
     }
 
+    browser_audio.set_ready(true);
     std::jthread consumer([&](std::stop_token stop) {
         constexpr auto IDLE_SLEEP = std::chrono::milliseconds(10);
         std::vector<float> chunk(samples_per_second / 10);
         auto idle_time = std::chrono::milliseconds(0);
 
         while (true) {
+            const auto session = browser_audio.session();
+            if (session != processing_session) {
+                vad.reset();
+                processing_session = session;
+                processing_ended_at_ms = 0;
+                // Drain system samples captured before the switch. Only this thread reads the ring.
+                while (ring.read(chunk.data(), chunk.size()) != 0) {}
+            }
+            if (!session.empty()) {
+                if (stop.stop_requested()) break;
+                BrowserAudioInput::Chunk input;
+                if (browser_audio.pop(input)) {
+                    if (input.session != processing_session) continue;
+                    if (wav_dump.is_open()) wav_dump.write(input.samples.data(), input.samples.size());
+                    // Feed at most one VAD window so the source clock is accurate within 32 ms.
+                    for (size_t offset = 0; offset < input.samples.size();) {
+                        const size_t count = std::min(size_t{512}, input.samples.size() - offset);
+                        processing_ended_at_ms = input.ended_at_ms -
+                            static_cast<int64_t>((input.samples.size() - offset - count) * 1000 / 16000);
+                        vad.process(input.samples.data() + offset, count);
+                        offset += count;
+                    }
+                } else {
+                    std::this_thread::sleep_for(IDLE_SLEEP);
+                }
+                continue;
+            }
             const size_t read_count = ring.read(chunk.data(), chunk.size());
             if (read_count == 0) {
                 // 종료 요청을 받아도 버퍼에 남은 샘플은 모두 처리한 뒤 끝낸다.
@@ -489,6 +520,7 @@ int run_live(const Options& options, const CaptureConfig& config, const VadConfi
     WaitForSingleObject(quit_event(), INFINITE);
 
     capture.stop();
+    browser_audio.set_ready(false);
     worker.stop();
     consumer.request_stop();
     consumer.join();
@@ -553,8 +585,6 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "Failed to read glossary file: %s\n", to_utf8(options.glossary).c_str());
         return 1;
     }
-    translator = create_translator(options, translator_config);
-    if (!translator) return 1;
 
     // 브라우저 확장 프로그램이 자막을 받아 갈 로컬 서버. 페어링 코드를 확장 프로그램에 입력해 연결한다.
     const std::string token = load_or_create_pairing_token(pairing_token_path());
@@ -579,6 +609,10 @@ int wmain(int argc, wchar_t** argv) {
     std::atomic<uint64_t> settings_generation{0};
 
     CliAccounts cli_accounts;
+    BrowserAudioInput browser_audio;
+    // Only the VAD consumer accesses these; metadata is copied into each recognition job.
+    std::string processing_session;
+    int64_t processing_ended_at_ms = 0;
     SubtitleServer server;
     const ServerConfig server_config{
         .port = options.port,
@@ -626,7 +660,7 @@ int wmain(int argc, wchar_t** argv) {
             }
             const bool compare_toggle = (settings.translator == "compare" && previous.translator == "hybrid") ||
                                         (settings.translator == "hybrid" && previous.translator == "compare");
-            if (compare_toggle && settings.source_language == previous.source_language &&
+            if (translator && compare_toggle && settings.source_language == previous.source_language &&
                 settings.target_language == previous.target_language && settings.deepl_key == previous.deepl_key) {
                 if (!save_translation_settings(settings)) return false;
                 static_cast<DraftedTranslator*>(translator.get())->set_compare_mode(settings.translator == "compare");
@@ -640,14 +674,14 @@ int wmain(int argc, wchar_t** argv) {
             std::lock_guard lock(settings_mutex);
             const bool uses_deepl = settings.translator == "deepl" || settings.translator == "hybrid" ||
                                     settings.translator == "compare" || settings.translator == "codex-hybrid";
-            const bool rebuild = settings.translator != previous.translator ||
+            const bool rebuild = !translator || settings.translator != previous.translator ||
                                  settings.target_language != previous.target_language ||
                                  ((settings.translator == "codex" || settings.translator == "codex-hybrid") &&
                                   settings.codex_model != previous.codex_model) ||
                                  (settings.translator == "claude" && settings.claude_model != previous.claude_model) ||
                                  (uses_deepl && (settings.source_language != previous.source_language ||
                                                  settings.deepl_key != previous.deepl_key));
-            const bool retarget_local = settings.translator == "local" && previous.translator == "local" &&
+            const bool retarget_local = translator && settings.translator == "local" && previous.translator == "local" &&
                                         settings.target_language != previous.target_language;
             std::unique_ptr<Translator> replacement;
             if (rebuild && !retarget_local) {
@@ -680,12 +714,30 @@ int wmain(int argc, wchar_t** argv) {
         },
         .get_cli_status = [&](const std::string& provider) { return cli_accounts.status(provider); },
         .connect_cli = [&](const std::string& provider) { return cli_accounts.connect(provider); },
+        .browser_audio = &browser_audio,
     };
     if (token.empty() || !server.start(server_config)) {
         std::fprintf(stderr, "Failed to start the local server on port %d.\n", options.port);
         return 1;
     }
     std::printf("Pairing code: %d-%s\n", options.port, token.c_str());
+
+    // Keep settings reachable even when the initial local model takes a long time to load.
+    // A settings change wins over this startup request, including one made before the thread starts.
+    std::jthread initial_translator_loader([&] {
+        if (settings_generation.load(std::memory_order_acquire) != 0) return;
+        std::printf("Loading translation backend: %s\n", options.translator.c_str());
+        auto initial = create_translator(options, translator_config);
+        std::lock_guard save_lock(settings_save_mutex);
+        std::lock_guard lock(settings_mutex);
+        if (settings_generation.load(std::memory_order_acquire) != 0) return;
+        if (!initial) {
+            std::fprintf(stderr, "Translation backend failed to load. Select another backend in settings.\n");
+            return;
+        }
+        translator = std::move(initial);
+        std::printf("Translation backend ready: %s\n", options.translator.c_str());
+    });
 
     // 인식과 번역은 오디오를 받는 스레드와 따로 돌린다. 인식하는 동안에도 발화 구간을 계속 찾아야
     // 다음 발화의 인식을 제때 미리 시작할 수 있다.
@@ -704,8 +756,10 @@ int wmain(int argc, wchar_t** argv) {
     uint64_t applied_settings_generation = 0;
     const auto translate_speech = [&](const RecognizedSpeech& speech) {
         std::lock_guard settings_lock(settings_mutex);
+        if (speech.audio_session != browser_audio.session()) return;
+        if (!translator) return;
         const uint64_t current_settings_generation = settings_generation.load(std::memory_order_acquire);
-        if (applied_settings_generation != current_settings_generation) {
+        if (applied_settings_generation != current_settings_generation || sentence.audio_session != speech.audio_session) {
             sentence = {};
             recent_speech.clear();
             applied_stream_info.clear();
@@ -793,12 +847,19 @@ int wmain(int argc, wchar_t** argv) {
         // 번역문이 만들어지는 동안 만들어진 부분부터 자막으로 보낸다. 긴 문장도 첫 낱말은 금방 뜬다.
         // 합친 문장을 다시 번역할 때는, 화면에 떠 있는 앞 구간의 번역보다 길어진 뒤에 바꿔서 자막이 줄었다 늘지 않게 한다.
         std::optional<Clock::time_point> first_shown_at;
+        const auto publish_subtitle = [&](const std::string& translation, bool final) {
+            // The browser uses source time to schedule subtitles against the delayed media clock.
+            if (speech.audio_session != browser_audio.session()) return sentence.subtitle;
+            return server.publish({sentence.source, translation, sentence.subtitle, speech.audio_session,
+                                   speech.source_ended_at_ms,
+                                   is_live ? to_ms(Clock::now() - speech.speech_ended_at) : 0, final});
+        };
         const Translator::PartialCallback show_partial = [&](std::string_view partial) {
             if (partial.size() <= sentence.translation.size()) {
                 return;
             }
             sentence.translation = partial;
-            sentence.subtitle = server.publish({sentence.source, sentence.translation, sentence.subtitle});
+            sentence.subtitle = publish_subtitle(sentence.translation, false);
             if (!first_shown_at) {
                 first_shown_at = Clock::now();
             }
@@ -809,6 +870,7 @@ int wmain(int argc, wchar_t** argv) {
             if (!merges) {
                 sentence = {};
             }
+            sentence.audio_session = speech.audio_session;
             // 쉬었다가 이어진 구간 사이는 띄워서 번역 모델이 경계를 알 수 있게 한다.
             // 쉬지 않고 이어진 구간은 일본어처럼 띄어 쓰지 않는 글이면 그대로 붙인다.
             if (!sentence.source.empty() && (speech.silence_before_ms >= vad_config.min_silence_ms ||
@@ -869,7 +931,7 @@ int wmain(int argc, wchar_t** argv) {
         // 완성된 번역문으로 화면의 자막(만들어지던 중의 자막이나 합치기 전 앞 구간의 자막)을 바꾼다.
         if (!translation.empty()) {
             sentence.translation = translation;
-            sentence.subtitle = server.publish({sentence.source, translation, sentence.subtitle});
+            sentence.subtitle = publish_subtitle(translation, true);
         }
     };
     TranslationWorker translations(translate_speech);
@@ -888,7 +950,9 @@ int wmain(int argc, wchar_t** argv) {
 
     VadSegmenter vad;
     const VadCallbacks vad_callbacks{
-        .on_segment = [&](const SpeechSegment& segment) { worker.submit(segment); },
+        .on_segment = [&](const SpeechSegment& segment) {
+            worker.submit(segment, processing_session, processing_ended_at_ms);
+        },
         .on_pause = [&](std::span<const float> samples) { worker.begin_early(samples); },
         .on_resume = [&] { worker.cancel_early(); },
     };
@@ -901,7 +965,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!is_live) {
         return run_file(options, config, vad, worker);
     }
-    const int result = run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token);
+    const int result = run_live(options, config, vad_config, vad, worker, std::to_string(options.port) + "-" + token,
+                                browser_audio, processing_session, processing_ended_at_ms);
     translations.stop();
     // 캡처와 WAV 저장은 run_live에서 끝냈다. Debug 인식 커널이 긴 연산 중이면
     // 작업 스레드 소멸자가 끝날 때까지 기다리므로, 사용자 종료 요청은 여기서 마친다.

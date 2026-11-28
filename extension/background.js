@@ -12,6 +12,26 @@ let status = "idle"; // idle | unpaired | connected | rejected | disconnected
 let polling = false;
 // 방송 탭이 마지막으로 알려 준 진단 정보 (찾은 채팅 줄 수, 보낸 채팅 수).
 let diagnostics = null;
+let captureSession = null;
+let startingViewing = false;
+const captureReady = chrome.storage.session.get("captureSession").then((saved) => {
+  captureSession = saved.captureSession ?? null;
+});
+
+async function stopViewing() {
+  await captureReady;
+  const previous = captureSession;
+  captureSession = null;
+  await chrome.storage.session.remove("captureSession");
+  if (previous) await post("/v1/audio/stop", { session: previous.session });
+  broadcast({ type: "captureState", active: false });
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  captureReady.then(() => {
+    if (tabId === captureSession?.viewerTabId || tabId === captureSession?.sourceTabId) stopViewing();
+  });
+});
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -119,6 +139,10 @@ async function pollSubtitles() {
           replaces: subtitle.replaces ?? 0,
           source: subtitle.source,
           translation: subtitle.translation,
+          audio_session: subtitle.audio_session ?? "",
+          speech_ended_at_ms: subtitle.speech_ended_at_ms ?? 0,
+          latency_ms: subtitle.latency_ms ?? 0,
+          final: subtitle.final ?? true,
         });
       }
       after = body.latest;
@@ -136,11 +160,15 @@ async function pollSubtitles() {
 
 chrome.runtime.onConnect.addListener((port) => {
   const audioOnly = port.name === "subtitles-audio";
-  if (port.name !== "subtitles" && !audioOnly) {
+  const viewer = port.name === "subtitles-viewer";
+  if (port.name !== "subtitles" && !audioOnly && !viewer) {
     return;
   }
   ports.add(port);
   port.postMessage({ type: "status", status });
+  captureReady.then(() => {
+    try { port.postMessage({ type: "captureState", active: !!captureSession }); } catch { /* Tab closed during startup. */ }
+  });
   if (audioOnly && port.sender?.tab) {
     const tab = port.sender.tab;
     audioPorts.set(port, tab.id);
@@ -148,7 +176,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   // 콘텐츠 스크립트가 주기적으로 보내는 메시지는 서비스 워커가 잠들지 않게 하는 역할도 한다.
   port.onMessage.addListener((message) => {
-    if (audioOnly) return;
+    if (audioOnly || viewer) return;
     if (message?.type === "context") {
       post("/v1/context", message.context);
     } else if (message?.type === "chat") {
@@ -166,6 +194,65 @@ chrome.runtime.onConnect.addListener((port) => {
 
 // 팝업에서 오는 요청을 처리한다.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "startViewing") {
+    if (startingViewing) {
+      sendResponse({ ok: false, error: "시청 창을 여는 중입니다." });
+      return false;
+    }
+    startingViewing = true;
+    (async () => {
+      await captureReady;
+      if (captureSession) {
+        await chrome.tabs.update(captureSession.viewerTabId, { active: true });
+        return { ok: true };
+      }
+      const pairing = await loadPairing();
+      if (!pairing) throw new Error("먼저 Windows 앱과 연결해 주세요.");
+      const ping = await request(pairing, "/v1/ping");
+      if (!ping.ok || !(await ping.json()).browser_audio) throw new Error("원본 음성 분리를 지원하는 최신 Windows 앱이 필요합니다.");
+      const [source] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!source?.id || !/^https?:/.test(source.url ?? "")) throw new Error("방송 탭에서 확장 프로그램을 열어 시작하세요.");
+      const viewer = await chrome.tabs.create({ url: chrome.runtime.getURL("viewer/viewer.html"), active: false });
+      try {
+        const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: source.id, consumerTabId: viewer.id });
+        captureSession = { session: crypto.randomUUID(), sourceTabId: source.id, viewerTabId: viewer.id, streamId };
+        await chrome.storage.session.set({ captureSession });
+        broadcast({ type: "captureState", active: true });
+        await chrome.tabs.update(viewer.id, { active: true });
+        return { ok: true };
+      } catch (error) {
+        await chrome.tabs.remove(viewer.id);
+        throw error;
+      }
+    })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }))
+      .finally(() => { startingViewing = false; });
+    return true;
+  }
+  if (message?.type === "getCaptureSession") {
+    captureReady.then(() => sendResponse({
+      session: _sender.tab?.id === captureSession?.viewerTabId ? captureSession : null,
+    }));
+    return true;
+  }
+  if (message?.type === "getCaptureStream") {
+    (async () => {
+      await captureReady;
+      if (_sender.tab?.id !== captureSession?.viewerTabId) throw new Error("시청 세션이 종료되었습니다.");
+      const streamId = await chrome.tabCapture.getMediaStreamId({
+        targetTabId: captureSession.sourceTabId, consumerTabId: captureSession.viewerTabId,
+      });
+      return { ok: true, streamId };
+    })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "stopViewing") {
+    captureReady.then(async () => {
+      if (_sender.tab?.id !== captureSession?.viewerTabId) return { ok: false };
+      await stopViewing();
+      return { ok: true };
+    }).then(sendResponse);
+    return true;
+  }
   if (message?.type === "getStatus") {
     sendResponse({ status, diagnostics });
     return false;

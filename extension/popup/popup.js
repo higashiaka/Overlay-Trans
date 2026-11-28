@@ -6,6 +6,16 @@ const STATUS_TEXT = {
   disconnected: "앱에 연결할 수 없습니다. 앱이 실행 중인지 확인해 주세요.",
 };
 
+document.getElementById("start-viewing").addEventListener("click", async (event) => {
+  event.target.disabled = true;
+  const result = document.getElementById("viewing-result");
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "startViewing" });
+    result.textContent = response?.ok ? "시청 창을 열었습니다." : response?.error ?? "시청 창을 열지 못했습니다.";
+  } catch (error) { result.textContent = error.message; }
+  finally { event.target.disabled = false; }
+});
+
 const PAIR_FAILURE_TEXT = {
   format: "코드 형식이 올바르지 않습니다. 예: 47815-XXXXXXXXXXXXXXXX",
   rejected: "앱이 이 코드를 거부했습니다. 앱에 표시된 코드를 다시 확인해 주세요.",

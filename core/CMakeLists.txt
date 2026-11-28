@@ -21,3 +21,12 @@ add_library(overlay_core STATIC
 
 target_include_directories(overlay_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(overlay_core PRIVATE whisper llama overlay_httplib overlay_sherpa_onnx)
+
+option(OVERLAY_BUILD_AUDIO_TESTS "Build browser audio transport tests" OFF)
+if(OVERLAY_BUILD_AUDIO_TESTS)
+    enable_testing()
+    add_executable(overlay_browser_audio_tests tests/browser_audio_tests.cpp server/subtitle_server.cpp)
+    target_include_directories(overlay_browser_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(overlay_browser_audio_tests PRIVATE overlay_httplib)
+    add_test(NAME overlay_browser_audio_tests COMMAND overlay_browser_audio_tests)
+endif()

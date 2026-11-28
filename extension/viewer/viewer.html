@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>OverLay-Trans · 딜레이 보정</title>
+  <link rel="stylesheet" href="viewer.css" />
+  <link rel="stylesheet" href="../content/overlay.css" />
+</head>
+<body>
+  <header><h1>OverLay-Trans</h1><p id="status" role="status">원본 탭을 연결하는 중…</p></header>
+  <main>
+    <section id="player"><video id="video" playsinline></video><video id="live-video" playsinline hidden></video></section>
+    <section class="settings" aria-label="딜레이 보정 설정">
+      <label>사용 모드 <select id="mode"><option value="watch">시청 모드</option><option value="chat">채팅 모드</option></select></label>
+      <label>딜레이 보정 <select id="policy"><option value="off">끄기</option><option value="manual">수동</option><option value="auto">번역 기록으로 자동 조정</option></select></label>
+      <label class="slider">기본 보정량 <output id="delay-value" for="delay">2.0초</output><input id="delay" type="range" min="0" max="10" step="0.1" value="2" /></label>
+      <p id="metrics" aria-live="polite"></p>
+      <label><input id="show-source" type="checkbox" checked /> 원문 함께 표시</label>
+      <div class="buttons"><button id="resume" type="button">재생·소리 켜기</button><button id="source" type="button">원본 탭·채팅 열기</button><button id="fullscreen" type="button">전체 화면</button><button id="stop" type="button">보정 종료</button></div>
+      <p class="hint">원본 탭은 계속 재생해 두세요. 보정량 증가 시 잠시 대기하고, 감소 시 최대 1.05배속으로 따라잡습니다. 보정을 끄면 실시간 캡처로 전환합니다. 시청 창을 닫으면 원래 탭의 소리가 복구됩니다.</p>
+      <details><summary>최근 번역 지연 기록</summary><button id="reset-history" type="button">기록 초기화</button><ol id="history"></ol></details>
+    </section>
+  </main>
+  <script src="delay.js"></script><script src="../content/overlay.js"></script><script src="viewer.js"></script>
+</body>
+</html>

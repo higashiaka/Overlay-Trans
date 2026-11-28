@@ -1,4 +1,5 @@
 #include "subtitle_server.h"
+#include "audio/browser_audio.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -129,6 +131,10 @@ void SubtitleServer::Impl::handle_subtitles(const httplib::Request& request, htt
                     {"source", stored.subtitle.source},
                     {"translation", stored.subtitle.translation},
                     {"replaces", stored.subtitle.replaces},
+                    {"audio_session", stored.subtitle.audio_session},
+                    {"speech_ended_at_ms", stored.subtitle.speech_ended_at_ms},
+                    {"latency_ms", stored.subtitle.latency_ms},
+                    {"final", stored.subtitle.final},
                 });
             }
         }
@@ -250,7 +256,7 @@ bool SubtitleServer::start(const ServerConfig& config) {
                                                    : httplib::Server::HandlerResponse::Handled;
     });
     impl_->server.Get("/v1/ping", [](const httplib::Request&, httplib::Response& response) {
-        response.set_content(R"({"app":"overlay-trans","version":1})", JSON_TYPE);
+        response.set_content(R"({"app":"overlay-trans","version":1,"browser_audio":true})", JSON_TYPE);
     });
     impl_->server.Get("/v1/settings", [this](const httplib::Request&, httplib::Response& response) {
         if (!impl_->config.get_settings) { response.status = 404; return; }
@@ -289,6 +295,37 @@ bool SubtitleServer::start(const ServerConfig& config) {
     });
     impl_->server.Post("/v1/chat", [this](const httplib::Request& request, httplib::Response& response) {
         impl_->handle_chat(request, response);
+    });
+    impl_->server.Post("/v1/audio/start", [this](const httplib::Request& request, httplib::Response& response) {
+        const auto body = nlohmann::json::parse(request.body, nullptr, false);
+        if (!body.is_object() || request.body.size() > 256) { response.status = 400; return; }
+        const auto session = read_text(body, "session", 65);
+        if (!impl_->config.browser_audio || !impl_->config.browser_audio->start(session)) {
+            response.status = 409;
+            return;
+        }
+        response.set_content(R"({"ok":true})", JSON_TYPE);
+    });
+    impl_->server.Post("/v1/audio/stop", [this](const httplib::Request& request, httplib::Response& response) {
+        const auto body = nlohmann::json::parse(request.body, nullptr, false);
+        if (!body.is_object() || request.body.size() > 256) { response.status = 400; return; }
+        if (impl_->config.browser_audio) impl_->config.browser_audio->stop(read_text(body, "session", 65));
+        response.set_content(R"({"ok":true})", JSON_TYPE);
+    });
+    impl_->server.Post("/v1/audio", [this](const httplib::Request& request, httplib::Response& response) {
+        if (!impl_->config.browser_audio || request.body.empty() || request.body.size() > 16384 ||
+            request.body.size() % sizeof(float) != 0) { response.status = 400; return; }
+        try {
+            std::vector<float> samples(request.body.size() / sizeof(float));
+            std::memcpy(samples.data(), request.body.data(), request.body.size());
+            if (!impl_->config.browser_audio->push(request.get_param_value("session"),
+                    std::stoll(request.get_param_value("sequence")),
+                    std::stoll(request.get_param_value("ended_at_ms")), samples)) {
+                response.status = 409;
+                return;
+            }
+            response.set_content(R"({"ok":true})", JSON_TYPE);
+        } catch (const std::exception&) { response.status = 400; }
     });
 
 #ifdef _WIN32

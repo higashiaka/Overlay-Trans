@@ -87,6 +87,9 @@
     }
 
     port.onMessage.addListener((message) => {
+      // Separated audio belongs only to the delayed viewer, never the captured source image.
+      if (message.type === "captureState" && message.active) { overlay.detach(); return; }
+      if (message.type === "subtitle" && message.audio_session) return;
       if (site.audioOnly) {
         if (message.type === "tabAudio") {
           updateAudioState(message.audible);

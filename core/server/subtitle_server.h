@@ -8,11 +8,17 @@
 
 namespace overlay_trans {
 
+class BrowserAudioInput;
+
 struct Subtitle {
     std::string source;       // 인식된 원문 (UTF-8)
     std::string translation;  // 번역문 (UTF-8)
     // 이 자막이 대신할 이전 자막의 번호. 말이 이어져서 앞의 자막과 합쳐 다시 번역한 경우에 넣는다. 0이면 새 자막이다.
     int64_t replaces = 0;
+    std::string audio_session;
+    int64_t speech_ended_at_ms = 0;
+    int64_t latency_ms = 0;
+    bool final = true;
 };
 
 // 확장 프로그램이 방송 페이지에서 읽어 보내 주는 정보.
@@ -56,6 +62,7 @@ struct ServerConfig {
     std::function<bool(const TranslationSettings&)> save_settings;
     std::function<CliAccountStatus(const std::string&)> get_cli_status;
     std::function<bool(const std::string&)> connect_cli;
+    BrowserAudioInput* browser_audio = nullptr;
 };
 
 // 브라우저 확장 프로그램과 자막, 방송 정보를 주고받는 로컬 HTTP 서버.

@@ -52,6 +52,7 @@ test("custom sites display subtitles on playing video without sending chat or co
   for (const callback of timers.values()) callback();
   assert.deepEqual(sent, ["keepalive"]);
   handleMessage({ type: "subtitle", translation: "첫 자막" });
+  handleMessage({ type: "subtitle", audio_session: "delayed-viewer", translation: "캡처 화면에 들어가면 안 되는 자막" });
   video.paused = true;
   timers.get(1000)();
   handleMessage({ type: "subtitle", translation: "재생 중지 후 자막" });
